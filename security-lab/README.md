@@ -29,3 +29,21 @@ Both machines operate on the `192.168.0.0/24` subnet connected via virtual bridg
 - Imported to Proxmox using `qm importdisk`
 - Attached as IDE controller (required for LVM compatibility)
 - Default credentials: `msfadmin / msfadmin`
+
+## ⚠️ Security Warning
+Metasploitable2 is intentionally vulnerable. It is isolated to the local network and should never be exposed to the internet.
+
+## Workflow
+```
+Kali Linux (attacker) → attacks → Metasploitable2 (target)
+                                          ↓
+                              Wazuh detects suspicious activity
+                                          ↓
+                              Investigate logs and learn both sides
+```
+
+## Tools Used
+- **Metasploit Framework** — exploitation framework on Kali
+- **Nmap** — network scanning and enumeration
+- **Burp Suite** — web application testing
+- **Wazuh** — SIEM and log monitoring (coming in Phase 4)

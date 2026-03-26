@@ -32,6 +32,7 @@ Proxmox VE is the bare-metal hypervisor running on the Dell OptiPlex 9020 SFF. I
 | VM ID | Name | Purpose | Status |
 |---|---|---|---|
 | 100 | OPNsense | Firewall / Router | ✅ Running |
+| 101 | Metasploitable2 | General exploitation practice | ✅ Running |
 
 ## Access
 - Web UI: `https://192.168.0.2:8006`

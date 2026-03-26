@@ -24,7 +24,6 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
 - [OPNsense](./opnsense/README.md) - Firewall setup and network configuration
 - [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
-- [Gaming](./gaming/README.md) - Gaming VM setup and emulation
  
   ## Roadmap
 - [x] Phase 0 - Hardware setup

@@ -19,22 +19,22 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
   | **NIC** | H!Fiber I350 Dual Port + Onboard Intel |
   | **Firewall VM** | OPNsense 26.1.2 |
 
-  ## Documentation Structure
-  - [Hardware](./hardware/README.md) - Physical hardware specs and setup
-  - [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
-  - [OPNsense](./opnsense/README.md) - Firewall setup and network configuration
+ ## Documentation Structure
+- [Hardware](./hardware/README.md) - Physical hardware specs and setup
+- [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
+- [OPNsense](./opnsense/README.md) - Firewall setup and network configuration
+- [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
+- [Gaming](./gaming/README.md) - Gaming VM setup and emulation
  
   ## Roadmap
-  - [x] Phase 0 - Hardware setup
-  - [x] Phase 1 - Proxmox VE installation
-  - [x] Phase 2 - OPNsense firewall VM
-  - [ ] Phase 3 - Docker + Jellyfin + Pi-hole
-  - [ ] Phase 4 - Security lab + Wazuh SIEM
-  - [ ] Phase 5 - Windows VM (XBOX Cloud Gaming and retro emulation)
-  - [ ] Phase 6 - AI agents with n8n
+- [x] Phase 0 - Hardware setup
+- [x] Phase 1 - Proxmox VE installation
+- [x] Phase 2 - OPNsense firewall VM
+- [ ] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
+- [ ] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA
+- [ ] Phase 5 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)
+- [ ] Phase 6 - AI agents with n8n
  
-  ## Connect
-  - GitHub: [@solomonleon1992](https://github.com/solomonleon1992)
 
 
 

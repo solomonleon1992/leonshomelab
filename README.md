@@ -3,43 +3,42 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 
 ## Goals
 - Cybersecurity and penetration testing practice
-- Self-hosted services (Jellyfin, Pi-hole..)
+- Self-hosted services (Jellyfin, Pi-hole, Portainer)
+- Remote access via Twingate zero-trust connector
 - Network engineering with OPNsense firewall
 - AI agent automation with n8n
 - Portfolio documentation for career development
 
-  ## Infrastructure Overview
-  | Component | Details |
-  |---|---|
-  | **Hypervisor** | Proxmox VE 9.1 |
-  | **Host** | Dell OptiPlex 9020 SFF |
-  | **CPU** | Intel Core i5-4590 @ 3.3GHz |
-  | **RAM** | 32GB DDR3 |
-  | **Storage** | 4TB HDD |
-  | **NIC** | H!Fiber I350 Dual Port + Onboard Intel |
-  | **Firewall VM** | OPNsense 26.1.2 |
+## Infrastructure Overview
+| Component | Details |
+|---|---|
+| **Hypervisor** | Proxmox VE 9.1 |
+| **Host** | Dell OptiPlex 9020 SFF |
+| **CPU** | Intel Core i5-4590 @ 3.3GHz |
+| **RAM** | 32GB DDR3 |
+| **Storage** | 4TB HDD |
+| **NIC** | H!Fiber I350 Dual Port + Onboard Intel |
+| **Firewall VM** | OPNsense 26.1.2 |
 
- ## Documentation Structure
+## VM & Container Inventory
+| ID | Type | Name | OS | IP | Purpose |
+|---|---|---|---|---|---|
+| 100 | VM | OPNsense | FreeBSD | 192.168.0.22 (WAN) / 192.168.1.1 (LAN) | Firewall / Router |
+| 101 | VM | Metasploitable2 | Linux | 192.168.0.24 | Vulnerable target (security lab) |
+| 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, Pi-hole |
+| 103 | LXC | Twingate Connector | Ubuntu 24.04 | 192.168.0.26 | Remote access tunnel |
+
+## Documentation Structure
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup
 - [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
 - [OPNsense](./opnsense/README.md) - Firewall setup and network configuration
 - [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
- 
-  ## Roadmap
+
+## Roadmap
 - [x] Phase 0 - Hardware setup
 - [x] Phase 1 - Proxmox VE installation
 - [x] Phase 2 - OPNsense firewall VM
-- [ ] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
+- [x] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
 - [ ] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA
 - [ ] Phase 5 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)
 - [ ] Phase 6 - AI agents with n8n
- 
-
-
-
-
-
-
-
- 
-  

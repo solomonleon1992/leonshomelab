@@ -11,7 +11,7 @@ A local attack lab environment built on Proxmox VE for cybersecurity practice, p
 | Proxmox Host | Hypervisor | 192.168.0.2 | Proxmox VE 9.1 |
 
 ## Network Configuration
-Both machines operate on the `192.168.0.0/24` subnet connected via virtual bridge `vmbr0` on Proxmox.
+All lab machines operate on the `192.168.0.0/24` subnet connected via virtual bridge `vmbr0` on Proxmox.
 
 ## Deployed Vulnerable VMs
 | VM | Purpose | VM ID | Status |
@@ -30,20 +30,30 @@ Both machines operate on the `192.168.0.0/24` subnet connected via virtual bridg
 - Attached as IDE controller (required for LVM compatibility)
 - Default credentials: `msfadmin / msfadmin`
 
-## ⚠️ Security Warning
-Metasploitable2 is intentionally vulnerable. It is isolated to the local network and should never be exposed to the internet.
-
-## Workflow
+## Attack Workflow
 ```
-Kali Linux (attacker) → attacks → Metasploitable2 (target)
-                                          ↓
-                              Wazuh detects suspicious activity
-                                          ↓
-                              Investigate logs and learn both sides
+Kali Linux (192.168.0.31)
+        |
+        | nmap scan / enumeration
+        |
+        v
+Metasploitable2 (192.168.0.24)
+        |
+        | logs generated
+        v
+   [Phase 4] Wazuh SIEM detects suspicious activity
+        |
+        v
+   Investigate alerts → learn both offense and defense
 ```
 
 ## Tools Used
-- **Metasploit Framework** — exploitation framework on Kali
-- **Nmap** — network scanning and enumeration
-- **Burp Suite** — web application testing
-- **Wazuh** — SIEM and log monitoring (coming in Phase 4)
+| Tool | Purpose | Location |
+|---|---|---|
+| Metasploit Framework | Exploitation framework | Kali Linux |
+| Nmap | Network scanning and enumeration | Kali Linux |
+| Burp Suite | Web application testing | Kali Linux |
+| Wazuh | SIEM and log monitoring | Planned Phase 4 |
+
+## ⚠️ Security Warning
+Metasploitable2 is intentionally vulnerable. It is isolated to the local network and should never be exposed to the internet.

@@ -27,11 +27,14 @@ OPNsense is a FreeBSD-based firewall and router VM running on Proxmox. It manage
 - WAN firewall rules: Block RFC1918 + bogon networks
 
 ## Known Issues & Fixes
-- Web UI not accessible from WAN by default (by design)
+- Web UI not accessible from WAN by default
 - Temporarily disabled firewall with `pfctl -d` to complete initial setup via WAN IP
 - Re-enable firewall after setup: `pfctl -e`
 
-## Access
-- Web UI (WAN): `https://192.168.0.22`
-- Web UI (LAN): `https://192.168.1.1`
-- Console: Proxmox noVNC console
+## Firewall Rules Summary
+
+| Rule | Interface | Action | Description |
+|---|---|---|---|
+| Block RFC1918 | WAN | Block | Prevents private IPs from entering WAN |
+| Block bogons | WAN | Block | Blocks invalid/unroutable IPs |
+| Allow LAN to any | LAN | Allow | Full outbound access for lab devices |

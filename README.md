@@ -6,7 +6,7 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - Self-hosted services (Jellyfin, Pi-hole, Portainer)
 - Remote access via Twingate zero-trust connector
 - Network engineering with OPNsense firewall
-- AI agent automation with n8n
+- AI agent automation with n8n and Paperclip
 - Portfolio documentation for career development
 
 ## Infrastructure Overview
@@ -32,9 +32,9 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup
 - [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
 - [OPNsense](./opnsense/README.md) - Firewall setup and network configuration
-- [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
-- [Twingate](./twingate/README.md) - Zero-trust remote access connector setup
 - [Docker](./docker/README.md) - Container host setup and self-hosted services
+- [Twingate](./twingate/README.md) - Zero-trust remote access connector setup
+- [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
 
 ## Roadmap
 - [x] Phase 0 - Hardware setup
@@ -43,4 +43,4 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - [x] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
 - [ ] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA
 - [ ] Phase 5 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)
-- [ ] Phase 6 - AI agents with n8n
+- [ ] Phase 6 - AI agents with n8n + Paperclip agent orchestration

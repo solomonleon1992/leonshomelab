@@ -23,5 +23,4 @@ A dedicated Ubuntu Server VM running Docker with Portainer for container managem
 | Portainer | 9000 | Docker container management UI | ✅ Running |
 | Jellyfin | 8096 | Media server | ✅ Running |
 | Pi-hole | 80 / 53 | DNS-based ad blocker + DNS server | ✅ Running |
-
-Remaining services (Jellyfin, Pi-hole) were deployed via the Portainer UI.
+| DVWA | 8080 | Damn Vulnerable Web App (security practice) | ✅ Running |

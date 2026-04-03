@@ -3,7 +3,7 @@
 ## Overview
 OPNsense is a FreeBSD-based firewall and router VM running on Proxmox. It manages all network traffic between the homelab and the internet.
 
-## Installation Details
+## VM Details
 | Configuration | Value |
 |---|---|
 | **Version** | OPNsense 26.1.2 |

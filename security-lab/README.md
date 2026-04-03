@@ -14,13 +14,12 @@ A local attack lab environment built on Proxmox VE for cybersecurity practice, p
 All lab machines operate on the `192.168.0.0/24` subnet via virtual bridge `vmbr0`.
 
 ## Deployed Vulnerable VMs
-| VM | Purpose | VM ID | Status |
+| VM | Purpose | ID | Status |
 |---|---|---|---|
 | Metasploitable2 | General exploitation practice | 101 | ✅ Running |
+| DVWA | Web application attack practice | 102 | ✅ Running |
 
 ## Planned Additions
-- DVWA (Damn Vulnerable Web App)
-- Wazuh SIEM
 - Metasploitable3
 
 ## Metasploitable2 Setup
@@ -38,7 +37,8 @@ All lab machines operate on the `192.168.0.0/24` subnet via virtual bridge `vmbr
 | OpenVAS (GVM) | Vulnerability scanning |
 | Metasploit Framework | Exploitation |
 | Burp Suite | Web application testing |
-| Wazuh | SIEM (Phase 4) |
+| Wazuh | SIEM |
+| DVWA | Vulnerable web app for SQLi, XSS, brute force practice |
 
 ## OpenVAS Scanning
 

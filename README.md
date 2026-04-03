@@ -27,6 +27,7 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 | 101 | VM | Metasploitable2 | Linux | 192.168.0.24 | Vulnerable target (security lab) |
 | 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, Pi-hole |
 | 103 | LXC | Twingate Connector | Ubuntu 24.04 | 192.168.0.26 | Remote access tunnel |
+| 104 | VM | Wazuh SIEM | Ubuntu Server 22.04 | 192.168.0.27 | SIEM + XDR threat detection |
 
 ## Documentation Structure
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup
@@ -35,12 +36,13 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - [Docker](./docker/README.md) - Container host setup and self-hosted services
 - [Twingate](./twingate/README.md) - Zero-trust remote access connector setup
 - [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
+- [Wazuh](./wazuh/README.md) - SIEM and XDR threat detection platform
 
 ## Roadmap
 - [x] Phase 0 - Hardware setup
 - [x] Phase 1 - Proxmox VE installation
 - [x] Phase 2 - OPNsense firewall VM
 - [x] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
-- [ ] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA
+- [x] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA
 - [ ] Phase 5 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)
 - [ ] Phase 6 - AI agents with n8n + Paperclip agent orchestration

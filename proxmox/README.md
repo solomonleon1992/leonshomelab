@@ -4,7 +4,7 @@
 
 Proxmox VE is the bare-metal hypervisor running on the Dell OptiPlex 9020 SFF. It manages all virtual machines and LXC containers in the homelab.
 
-## Installation Details
+## VM Details
 
 | Configuration | Value |
 |---|---|

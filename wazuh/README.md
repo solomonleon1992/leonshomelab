@@ -36,7 +36,7 @@ Credentials are printed at the end of setup — save immediately.
 ## Changing Admin Password
 ```bash
 curl -so wazuh-passwords-tool.sh https://packages.wazuh.com/4.13/wazuh-passwords-tool.sh
-sudo bash wazuh-passwords-tool.sh -u admin -p YourNewPassword1!
+sudo bash wazuh-passwords-tool.sh -u admin -p <enter new password here>
 sudo systemctl restart filebeat wazuh-dashboard wazuh-manager
 ```
 Password must contain uppercase, lowercase, number, and a symbol from `.*+?-`

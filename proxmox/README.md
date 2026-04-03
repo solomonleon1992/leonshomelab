@@ -48,4 +48,4 @@ Proxmox VE is the bare-metal hypervisor running on the Dell OptiPlex 9020 SFF. I
 | 101 | Metasploitable2 | General exploitation practice | Ubuntu 8.04 | 192.168.0.24 | ✅ Running |
 | 102 | Docker Host | Portainer, Jellyfin, Pi-hole | Ubuntu 22.04 | 192.168.0.25 | ✅ Running |
 | 103 | Twingate Connector | Remote access tunnel | Ubuntu 24.04 | 192.168.0.26 | ✅ Running |
-| 104 | Wazuh SIEM | SIEM + XDR threat detection | Ubuntu Server 22.04 | 192.168.0.27 | ✅ Running |
+| 104 | Wazuh SIEM | SIEM + XDR threat detection | Ubuntu 22.04 | 192.168.0.27 | ✅ Running |

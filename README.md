@@ -19,13 +19,14 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 | **Storage** | 4TB HDD |
 | **NIC** | H!Fiber I350 Dual Port + Onboard Intel |
 | **Firewall VM** | OPNsense 26.1.2 |
+| **Pi-hole DNS** | Raspberry Pi 4 (4GB) @ 192.168.0.50 |
 
 ## VM & Container Inventory
 | ID | Type | Name | OS | IP | Purpose |
 |---|---|---|---|---|---|
 | 100 | VM | OPNsense | FreeBSD | 192.168.0.22 (WAN) / 192.168.1.1 (LAN) | Firewall / Router |
 | 101 | VM | Metasploitable2 | Linux | 192.168.0.24 | Vulnerable target (security lab) |
-| 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, Pi-hole |
+| 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, DVWA |
 | 103 | LXC | Twingate Connector | Ubuntu 24.04 | 192.168.0.26 | Remote access tunnel |
 | 104 | VM | Wazuh SIEM | Ubuntu Server 22.04 | 192.168.0.27 | SIEM + XDR threat detection |
 

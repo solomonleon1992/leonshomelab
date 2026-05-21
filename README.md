@@ -6,7 +6,7 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - Self-hosted services (Jellyfin, Pi-hole, Portainer)
 - Remote access via Twingate zero-trust connector
 - Network engineering with OPNsense firewall
-- AI agent automation with n8n and Paperclip
+- AI agent automation with n8n and Claude API
 - Portfolio documentation for career development
 
 ## Infrastructure Overview
@@ -26,9 +26,16 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 |---|---|---|---|---|---|
 | 100 | VM | OPNsense | FreeBSD | 192.168.0.22 (WAN) / 192.168.1.1 (LAN) | Firewall / Router |
 | 101 | VM | Metasploitable2 | Linux | 192.168.0.24 | Vulnerable target (security lab) |
-| 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, DVWA |
+| 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, Pi-hole, DVWA |
 | 103 | LXC | Twingate Connector | Ubuntu 24.04 | 192.168.0.26 | Remote access tunnel |
 | 104 | VM | Wazuh SIEM | Ubuntu Server 22.04 | 192.168.0.27 | SIEM + XDR threat detection |
+
+## External Lab Machines
+| Machine | OS | IP | Purpose |
+|---|---|---|---|
+| Kali Laptop | Kali Linux | 192.168.0.31 | Penetration testing workstation |
+| Raspberry Pi 4 | Raspberry Pi OS Lite 64-bit | 192.168.0.50 | Pi-hole DNS ad blocker |
+| n8n AI Stack | Ubuntu Server 22.04 | 192.168.0.28 | AI agent automation platform |
 
 ## Documentation Structure
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup
@@ -38,12 +45,13 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - [Twingate](./twingate/README.md) - Zero-trust remote access connector setup
 - [Security Lab](./security-lab/README.md) - Attack lab setup and documentation
 - [Wazuh](./wazuh/README.md) - SIEM and XDR threat detection platform
+- [n8n AI Agents](./n8n-ai-agents/README.md) - AI automation and agent workflows
 
 ## Roadmap
 - [x] Phase 0 - Hardware setup
 - [x] Phase 1 - Proxmox VE installation
 - [x] Phase 2 - OPNsense firewall VM
 - [x] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
-- [x] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA
-- [ ] Phase 5 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)
-- [ ] Phase 6 - AI agents with n8n + Paperclip agent orchestration
+- [x] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA + Attack simulations
+- [x] Phase 5 - AI agent automation (n8n + Claude API + Ollama)
+- [ ] Phase 6 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)

@@ -19,8 +19,12 @@ All lab machines operate on the `192.168.0.0/24` subnet via virtual bridge `vmbr
 | Metasploitable2 | General exploitation practice | 101 | ✅ Running |
 | DVWA | Web application attack practice | 102 | ✅ Running |
 
-## Planned Additions
-- Metasploitable3
+## Attack Machines
+| Machine | Role | IP | OS | Status |
+|---|---|---|---|---|
+| Kali Laptop (ASUS E410K) | Attacker workstation | 192.168.0.31 | Kali Linux (native install) | ✅ Running |
+
+**Note:** Kali is installed natively on a dedicated laptop (not a VM) for full hardware access and performance during penetration testing.
 
 ## Metasploitable2 Setup
 - Downloaded from SourceForge as VMware vmdk

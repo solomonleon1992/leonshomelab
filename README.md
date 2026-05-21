@@ -29,13 +29,13 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 | 102 | VM | Docker Host | Ubuntu Server 22.04 | 192.168.0.25 | Portainer, Jellyfin, Pi-hole, DVWA |
 | 103 | LXC | Twingate Connector | Ubuntu 24.04 | 192.168.0.26 | Remote access tunnel |
 | 104 | VM | Wazuh SIEM | Ubuntu Server 22.04 | 192.168.0.27 | SIEM + XDR threat detection |
+| 105 | VM | n8n AI Stack | Ubuntu Server 22.04 | 192.168.0.28 | AI agent automation platform |
 
 ## External Lab Machines
 | Machine | OS | IP | Purpose |
 |---|---|---|---|
 | Kali Laptop | Kali Linux | 192.168.0.31 | Penetration testing workstation |
 | Raspberry Pi 4 | Raspberry Pi OS Lite 64-bit | 192.168.0.50 | Pi-hole DNS ad blocker |
-| n8n AI Stack | Ubuntu Server 22.04 | 192.168.0.28 | AI agent automation platform |
 
 ## Documentation Structure
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup

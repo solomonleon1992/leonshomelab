@@ -41,11 +41,11 @@ Proxmox VE is the bare-metal hypervisor running on the Dell OptiPlex 9020 SFF. I
 | local-lvm | LVM-Thin | VM disks, LXC containers |
 
 ## Virtual Machines & Container Inventory
-
 | ID | Name | Purpose | OS | IP | Status |
 |---|---|---|---|---|---|
 | 100 | OPNsense | Firewall / Router | FreeBSD | 192.168.0.22 / 192.168.1.1 | ✅ Running |
 | 101 | Metasploitable2 | General exploitation practice | Ubuntu 8.04 | 192.168.0.24 | ✅ Running |
 | 102 | Docker Host | Manage containers | Ubuntu Server 22.04 | 192.168.0.25 | ✅ Running |
-| 103 | Twingate Connector | Remote access tunnel | Ubuntu 24.04 | 192.168.0.26 | ✅ Running |
+| 103 | Twingate Connector | Remote access tunnel | Ubuntu 24.04 LXC | 192.168.0.26 | ✅ Running |
 | 104 | Wazuh SIEM | SIEM + XDR threat detection | Ubuntu 22.04 | 192.168.0.27 | ✅ Running |
+| 105 | n8n AI Stack | AI agent automation platform | Ubuntu 22.04 | 192.168.0.28 | ✅ Running |

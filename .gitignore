@@ -1,0 +1,272 @@
+# =============================================================================
+#  leonshomelab — .gitignore
+# =============================================================================
+#  POSTURE: deny secret-bearing file types by default; explicitly allow
+#  sanitized examples at the bottom of this file.
+#
+#  RULE: when you introduce a new config type, add its secret-bearing files
+#  HERE FIRST, then commit the sanitized version. Never the other way around.
+#
+#  This is a PREVENTIVE control, not a complete one.
+#  Read the SECURITY NOTES at the end of this file.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 1. Private key material — never commit, no exceptions
+# -----------------------------------------------------------------------------
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.asc
+*.gpg
+*.kdbx
+
+# SSH
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.ppk
+known_hosts
+authorized_keys
+
+# PKI / CA directories (Caddy's internal CA root key lives here — losing OR
+# leaking it is unrecoverable; every client would need to re-trust a new root)
+pki/
+ca/
+certs/
+**/authorities/
+
+
+# -----------------------------------------------------------------------------
+# 2. Environment & variable files
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.env
+env.sh
+secrets.*
+*secret*
+*password*
+*.credentials
+credentials.*
+
+
+# -----------------------------------------------------------------------------
+# 3. Per-service landmines (homelab-specific)
+# -----------------------------------------------------------------------------
+
+# --- OPNsense ---------------------------------------------------------------
+# A full config.xml export contains user password hashes, API keys, certificate
+# PRIVATE KEYS, IPsec PSKs, and RADIUS secrets. Never commit one unsanitized.
+opnsense/config*.xml
+opnsense/*backup*.xml
+opnsense/**/*.xml
+
+# --- n8n --------------------------------------------------------------------
+# `n8n export:credentials --decrypted` writes plaintext API keys. Workflow
+# exports are usually safe (credentials are referenced by ID, not embedded)
+# BUT any key typed directly into a node field instead of a credential WILL
+# appear in the JSON. Eyeball every workflow export before committing.
+**/credentials*.json
+**/*decrypted*
+n8n-ai-agents/**/.n8n/
+n8n-ai-agents/**/database.sqlite
+
+# --- Wazuh ------------------------------------------------------------------
+# client.keys holds agent authentication keys; ossec.conf can carry authd and
+# integration secrets (Slack/email/API).
+**/client.keys
+**/ossec.conf
+wazuh/**/*.conf
+
+# --- Pi-hole ----------------------------------------------------------------
+# setupVars.conf contains WEBPASSWORD.
+**/setupVars.conf
+**/pihole-FTL.conf
+**/gravity.db
+
+# --- Twingate ---------------------------------------------------------------
+# Connector access tokens / refresh tokens.
+**/twingate/connector.conf
+**/*access_token*
+**/*refresh_token*
+
+# --- Proxmox ----------------------------------------------------------------
+# /etc/pve holds cluster keys. VM .conf files are mostly harmless hardware
+# definitions, but cloud-init `cipassword` and `sshkeys` land in them.
+proxmox/**/pve-*.key
+proxmox/**/*.cred
+**/qemu-server/*.conf
+
+# --- Caddy / reverse proxy --------------------------------------------------
+# The Caddyfile itself is normally safe to commit. Caddy's data directory is
+# not — it holds the internal CA root key.
+**/caddy/data/
+**/caddy_data/
+**/autosave.json
+
+
+# -----------------------------------------------------------------------------
+# 4. IaC tooling state
+# -----------------------------------------------------------------------------
+
+# Terraform — tfstate stores every resource attribute in PLAINTEXT, including
+# passwords and tokens. It is the single most common infra secret leak.
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+crash.log
+
+# Ansible
+*.retry
+vault_pass*
+.vault_pass*
+*.vault
+inventory/host_vars/
+inventory/group_vars/
+
+# Docker
+# POLICY: compose files in this homelab carry secrets INLINE — encryption
+# keys and database credentials are set directly in the compose environment
+# rather than sourced from a secret store (confirmed 2026-08-11). Compose
+# files are therefore blocked by default — commit a sanitized
+# `docker-compose.example.yml` instead, with values replaced by ${VAR}.
+# Reverse this rule ONLY after secrets move out of compose and into .env.
+docker-compose.yml
+docker-compose.yaml
+compose.yml
+compose.yaml
+docker-compose.override.yml
+docker-compose.*.local.yml
+
+
+# -----------------------------------------------------------------------------
+# 5. Backups, dumps & archives
+# -----------------------------------------------------------------------------
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*~
+*_backup.*
+# Timestamped backups — e.g. docker-compose.yml.backup-20260728-202350
+# (a bare `*.backup` rule does NOT match these)
+*.backup-*
+*.backup.*
+*.bak-*
+*.sql
+*.dump
+*.vma
+*.vma.zst
+*.vma.gz
+vzdump-*
+
+
+# -----------------------------------------------------------------------------
+# 6. Logs, scans & captures
+# -----------------------------------------------------------------------------
+# Scan output and packet captures expose internal topology and can contain
+# credentials in cleartext.
+*.log
+logs/
+*.pcap
+*.pcapng
+*.nessus
+openvas-*.xml
+gvm-*.xml
+nmap-*.xml
+*.gnmap
+
+
+# -----------------------------------------------------------------------------
+# 7. OS & editor noise
+# -----------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+.venv/
+__pycache__/
+node_modules/
+
+
+# -----------------------------------------------------------------------------
+# 8. ALLOW-LIST — sanitized templates that SHOULD be committed
+# -----------------------------------------------------------------------------
+# These negations must stay last; later rules win in .gitignore.
+# Note: a negation cannot rescue a file whose parent DIRECTORY is ignored.
+!*.example
+!*.example.*
+!*.sample
+!*.template
+!.env.example
+!**/*.example.yml
+!**/*.example.yaml
+!**/*.example.json
+!**/*.example.conf
+!*.tfvars.example
+
+# Public certificates are safe and useful to publish (e.g. the Caddy internal
+# root CA CERTIFICATE, so others can trust it). Private keys above stay blocked.
+!*.crt
+!*.cer
+!*.pub
+
+# SOPS/age-encrypted files are safe to commit — that is the entire point.
+!*.sops.yml
+!*.sops.yaml
+!*.sops.json
+
+# Documentation is this repo's primary content and must never be silently
+# dropped by a broad pattern above — e.g. `secrets-handling.md` matches
+# `*secret*`, and `credentials.md` matches `credentials.*`.
+# Note: .gitignore cannot protect against a secret pasted INTO a .md file.
+# That is what the pre-commit scanner is for — see note 4 below.
+!*.md
+!**/*.md
+
+# Keep this file tracked.
+!.gitignore
+
+
+# =============================================================================
+#  SECURITY NOTES — read before trusting this file
+# =============================================================================
+#
+#  1. .gitignore is NOT retroactive. It has no effect on files already
+#     committed. To untrack something already in history:
+#         git rm --cached <file>
+#     ...but that only removes it from the CURRENT commit.
+#
+#  2. GIT HISTORY IS FOREVER. If a secret is ever committed and pushed,
+#     deleting the file does NOT remove it — it stays in the object store and
+#     in every clone and fork. The ONLY correct response is to ROTATE THE
+#     SECRET immediately. Treat history rewriting as cleanup, never as a fix.
+#
+#  3. `git add -f` bypasses every rule in this file.
+#
+#  4. This file cannot protect against a secret PASTED INTO A MARKDOWN FILE.
+#     That is the most likely leak vector for this repo, since it is
+#     documentation-first. A pre-commit secret scanner is the real control:
+#         gitleaks protect --staged
+#     Install one before the first config file lands.
+#
+#  5. Secrets belong in Bitwarden (migrating to self-hosted Vaultwarden).
+#     The repo should reference WHERE a credential lives, never its value.
+#
+#  6. Unrecoverable-if-lost secrets — back these up before touching anything:
+#       - N8N_ENCRYPTION_KEY  (loss = every n8n credential is unrecoverable)
+#       - Caddy internal CA root key (loss = re-trust root on every client)
+#
+# =============================================================================

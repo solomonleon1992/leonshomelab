@@ -17,7 +17,6 @@
 |---|---|
 | **NIC** | H!Fiber Dual Port Intel I350 (Low Profile PCIe) |
 | **Raspberry Pi 4 Model B** | 4GB RAM, 32GB MicroSD, Ubuntu Pi OS Lite 64-bit |
-| **Sparkle Intel Arc A310 Omni View** | 4GB GDDR6, 4x HDMI, 50W TDP, Single Slot Low Profile |
 
 **NIC Purpose:** Provides dedicated WAN + LAN interfaces for OPNsense firewall VM, keeping firewall traffic completely separate from Proxmox management traffic.
 
@@ -53,6 +52,5 @@
 
 - HDD SMART status: Good (44,803 power on hours at time of setup)
 - NIC confirmed detected in BIOS on both ports before Proxmox install
-- SFF case limits GPU to low profile cards only (relevant for Phase 5 Arc A310 ECO)
 - No dedicated SSD for OS — Proxmox runs directly from the 4TB HDD
 

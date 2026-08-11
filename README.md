@@ -38,6 +38,7 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 | Raspberry Pi 4 | Raspberry Pi OS Lite 64-bit | 192.168.0.50 | Pi-hole DNS ad blocker |
 
 ## Documentation Structure
+- **[Architecture](./ARCHITECTURE.md)** - Network topology, service dependencies, placement rationale, and risk register *(authoritative — start here)*
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup
 - [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
 - [OPNsense](./opnsense/README.md) - Firewall setup and network configuration
@@ -54,4 +55,3 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 - [x] Phase 3 - Docker + Jellyfin + Pi-hole + Twingate
 - [x] Phase 4 - Security lab + Wazuh SIEM + Metasploitable2 + DVWA + Attack simulations
 - [x] Phase 5 - AI agent automation (n8n + Claude API + Ollama)
-- [ ] Phase 6 - Windows Gaming VM (Intel Arc A310 GPU + Emulation + Xbox Cloud + Sunshine/Moonlight)

@@ -1,0 +1,88 @@
+# n8n AI Stack — sanitized example
+#
+# Deployed on VM 105 (`n8n-ai-stack`, 192.168.0.28) at ~/n8n-stack/docker-compose.yml
+#
+# ---------------------------------------------------------------------------
+# THIS IS A RECONSTRUCTION, NOT A COPY.
+# Built from the verified running stack — container names, images, volume
+# names, and environment variable NAMES were read from the live host on
+# 2026-08-12. No values were read. The live file is blocked by .gitignore
+# because it stores secrets inline.
+#
+# It differs from the live file in one deliberate way: secrets are sourced
+# from a .env file instead of being written inline. That is the target
+# pattern (see .env.example). Adopting it removes the reason compose files
+# are blocked from this repo in the first place.
+# ---------------------------------------------------------------------------
+#
+# Compose project name is `n8n-stack`, which prefixes the volumes:
+#   n8n-stack_n8n_data · n8n-stack_postgres_data · n8n-stack_ollama_data
+# Keep the directory named `n8n-stack` or set `name:` explicitly, otherwise
+# Compose creates NEW empty volumes and the stack comes up with no data.
+
+name: n8n-stack
+
+services:
+  n8n:
+    image: n8nio/n8n:latest        # pinned to 2.31.4 in production — see R-09
+    container_name: n8n
+    restart: unless-stopped
+    depends_on:
+      - n8n-postgres
+    ports:
+      - "5678:5678"
+    environment:
+      # --- database ---
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=n8n-postgres
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+
+      # --- credential encryption ---
+      # Encrypts every stored credential. If this changes or is lost, all
+      # credentials become permanently undecryptable. Master copy: Bitwarden.
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # --- addressing ---
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_PROXY_HOPS=1           # one hop: Caddy on VM 102
+      - N8N_SECURE_COOKIE=false    # likely removable now that Caddy serves HTTPS
+      - WEBHOOK_URL=${WEBHOOK_URL} # deprecation review pending
+      # - N8N_EDITOR_BASE_URL=     # not set in production; review with WEBHOOK_URL
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  n8n-postgres:
+    image: postgres:15
+    container_name: n8n-postgres
+    restart: unless-stopped
+    # No published port — reachable only on the compose network. Do not
+    # publish 5432; the segment is flat and unfiltered (ARCHITECTURE.md §3.3).
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    # Reached from n8n as http://ollama:11434 — NOT localhost, which inside
+    # the n8n container refers to the n8n container itself.
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  n8n_data:
+  postgres_data:
+  ollama_data:

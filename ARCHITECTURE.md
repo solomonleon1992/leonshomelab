@@ -1,6 +1,6 @@
 # Homelab Architecture
 
-**Last verified:** 2026-08-11 · **Maintainer:** Leon · **Status:** Authoritative
+**Last verified:** 2026-08-12 · **Maintainer:** Leon · **Status:** Authoritative
 
 This document is the single source of truth for topology, placement, and dependencies. Service READMEs describe *how to operate* a service; this describes *how the system fits together and why*. Where they conflict, this document wins.
 
@@ -150,22 +150,24 @@ Verified against `qm list` and `docker ps` on 2026-08-11. **Proxmox VM names are
 | 100 | `OPNsense` | Firewall/router — *not in path* | 2 | 2 GB | 20 GB | Running |
 | 101 | `Metasploitable2` | Intentionally vulnerable target | 1 | 512 MB | 8 GB | **Stopped** |
 | 102 | `Docker-Host` | See below | 2 | 4 GB | 60 GB | Running |
-| 103 | *(LXC — unconfirmed)* | Twingate connector | 1 | 1 GB | 3 GB | Assumed running |
+| 103 | `twingate-connector` (LXC) | Twingate connector | 1 | 1 GB | 3 GB | Running |
 | 104 | `Wazuh-SIEM` | Manager, Indexer, Dashboard, Filebeat (4.13) | 4 | 8 GB | 50 GB | Running |
 | 105 | `n8n-ai-stack` | See below | 4 | 8 GB | 64 GB | Running |
 
 VM 101 network: `net0: e1000, bridge=vmbr0`.
-CT 103 was not returned by `qm list` (QEMU only) — confirm with `pct list`.
+CT 103 is an LXC container, so it is not returned by `qm list` (QEMU only). Confirmed running as `twingate-connector` via `pct list` on 2026-08-12.
 
 **VM 102 — `Docker-Host` containers:**
 
-| Container | Image | Published ports |
-|---|---|---|
-| `caddy` | `caddy:2-alpine` | 80, 443 |
-| `portainer` | `portainer/portainer-ce:latest` | **9443** (9000 exposed, *not* published) |
-| `jellyfin` | `jellyfin/jellyfin:latest` | `network_mode: host` — binds host interfaces directly (8096 and DLNA/discovery ports). Docker reports no mappings by design; 8096 is reachable |
-| `DVWA` | `vulnerables/web-dvwa:latest` | 8080 |
-| `secplus-drill` | `nginx:alpine` | 8088 |
+| Container | Image | Published ports | Defined by |
+|---|---|---|---|
+| `caddy` | `caddy:2-alpine` | 80, 443 | `~/docker/caddy/docker-compose.yml` |
+| `portainer` | `portainer/portainer-ce:latest` | **9443** (9000 exposed, *not* published) | ⚠️ **none — `docker run` (R-13)** |
+| `jellyfin` | `jellyfin/jellyfin:latest` | `network_mode: host` — binds host interfaces directly (8096 and DLNA/discovery ports). Docker reports no mappings by design; 8096 is reachable | `~/docker/jellyfin/docker-compose.yml` |
+| `DVWA` | `vulnerables/web-dvwa:latest` | 8080 | ⚠️ **none — `docker run` (R-13)** |
+| `secplus-drill` | `nginx:alpine` | 8088 | `~/secplus-drill/docker-compose.yml` |
+
+**Two containers have no declarative definition.** `DVWA` and `portainer` were started with `docker run`; their configuration exists only as Docker daemon state. If VM 102 is lost, there is no file describing how to recreate them — `docker inspect` output is captured in the Tier 1 backup as a stopgap (§7.10). This is a direct blocker for IaC conversion (R-13).
 
 Volumes: `caddy_caddy_data`, `caddy_caddy_config`, `portainer_data`.
 Configs: `~/docker/{caddy,jellyfin,pihole}/`, `~/secplus-drill/`.
@@ -192,7 +194,11 @@ The upstream is addressed **by IP**, so the `.internal` migration changes only t
 | `n8n-postgres` | `postgres:15` | 5432 |
 | `ollama` | `ollama/ollama` | 11434 |
 
-Stack dir: `~/n8n-stack/`. Root fs: **31 GB, 82% used, 5.5 GB free (R-04)**.
+Stack dir: `~/n8n-stack/`. Root fs: **62 GB, 41% used, 35 GB free** — extended 2026-08-12, R-04 resolved.
+
+Disk consumption is Docker images (13.8 GB — `ollama/ollama` 10.6 GB, `n8nio/n8n` 2.53 GB, `postgres:15` 633 MB) plus volumes (2.8 GB). The **PostgreSQL database is 15 MB** — execution history is not a growth risk, and `docker system df` reports 0 B reclaimable.
+
+All four workflows are `active = false`. They are activated on demand rather than left running; see §7.8.
 
 Environment variables set: `DB_TYPE`, `DB_POSTGRESDB_{HOST,DATABASE,USER,PASSWORD}`, `N8N_ENCRYPTION_KEY`, `N8N_HOST`, `N8N_PORT`, `N8N_PROTOCOL`, `N8N_PROXY_HOPS`, `N8N_SECURE_COOKIE`, `WEBHOOK_URL`. **`N8N_EDITOR_BASE_URL` is not set.**
 
@@ -204,7 +210,7 @@ Each row carries a **provenance tag** recording where the rationale came from. A
 |---|---|
 | **Verified** | Confirmed against the live hosts or git history |
 | **Stated** | Already recorded in a service README |
-| **Confirmed** | Explicitly confirmed by the maintainer on 2026-08-11 |
+| **Confirmed** | Explicitly confirmed by the maintainer (date given in the row or change log) |
 | **Consulted** | Decided after discussing tradeoffs with Claude in prior sessions; options were presented and the maintainer chose |
 | **Vendor-default** | Followed the vendor's official installer or documentation |
 | **Constraint** | Not a choice — imposed by how the software is distributed |
@@ -220,6 +226,7 @@ Chat logs of the original design discussions exist and can be retrieved if any r
 | **OPNsense gets passed-through physical NICs** | Isolates the firewall data plane from Proxmox management, so a firewall misconfiguration cannot lock out the hypervisor. Technically sound, and it follows common Proxmox + OPNsense guidance rather than having been derived independently. Undermined only by the fact that nothing sits behind the firewall (§3.3). | Consulted |
 | **Twingate as LXC, not a VM** | Followed Twingate's official install documentation. The resource argument holds regardless: 1 vCPU / 1 GB / 3 GB for a single outbound daemon, where a full VM kernel would be waste on a 4-thread host. | Consulted |
 | **n8n on its own VM, not the Docker host** | Ollama's memory footprint and the AI stack's blast radius stay isolated from Jellyfin/Portainer/DVWA. Protects Terry from unrelated container churn. | Consulted |
+| **Ollama retained on VM 105** | Kept deliberately (2026-08-12) despite a 10.6 GB image footprint and no currently-active workflow routing to it. **Not to be reclaimed during cleanup or IaC migration** — its presence is intentional, not orphaned. | **Confirmed** |
 | **Wazuh on its own VM** | Deployed with Wazuh's official all-in-one installer, which effectively assumes ownership of the host. The 4 vCPU / 8 GB allocation comes from Wazuh's documented recommendations, not from local tuning. | Vendor-default |
 | **Caddy on VM 102, not its own host** | Co-located with the existing web services. **Accepted as questionable** — it makes VM 102 a SPOF for all HTTPS access and places the TLS terminator on the same host as DVWA, an intentionally vulnerable web app. Deferred work tracked at §7.1 and §7.2. | **Confirmed** |
 | **Metasploitable2 virtualized** | Distributed as a VM appliance; Proxmox snapshots enable clean state restore after exploitation exercises. | Constraint |
@@ -247,7 +254,7 @@ Proxmox and OPNsense are configured with `8.8.8.8` directly, bypassing Pi-hole �
 | Secret | Location | Status |
 |---|---|---|
 | Service credentials | Bitwarden (cloud) | Vaultwarden self-host migration planned (§7.5) |
-| `N8N_ENCRYPTION_KEY` | Set inline in the stack's compose file on VM 105 | ⚠️ **Not backed up.** Loss = every n8n credential unrecoverable |
+| `N8N_ENCRYPTION_KEY` | Compose file on VM 105; **copy in Bitwarden (2026-08-12)** | ✅ Backed up. The n8n dump is now genuinely restorable |
 | PostgreSQL credentials | Set inline in the same compose file | ⚠️ Blocked from this repo by `.gitignore` policy |
 | Caddy root CA key | Docker volume on VM 102 | ⚠️ Not backed up |
 | Twingate access token | Consumed at connector install | — |
@@ -278,7 +285,7 @@ A `192.168.0.0/24` **full-subnet resource** is also defined, granting remote cli
 
 | Component | Blast radius on failure |
 |---|---|
-| **`/dev/sda` (4 TB HDD)** | **Total lab loss** — all six VMs *and* the backup storage. Pi-hole and Kali survive. No working backups exist → unrecoverable |
+| **`/dev/sda` (4 TB HDD)** | **Total lab loss** — all six VMs *and* the backup storage. Pi-hole and Kali survive. The only n8n dump also lives on `/dev/sda` (inside VM 105), so **no off-host backup exists → unrecoverable** |
 | **Raspberry Pi / microSD** | All `.internal` resolution fails; IP access still works. **If clients have no secondary DNS, the entire household loses name resolution** |
 | **Consumer router** | Internet and all inter-host connectivity |
 | **VM 102 (`Docker-Host`)** | Caddy, Portainer, Jellyfin, DVWA, secplus-drill. Grows worse per service proxied (§7.2) |
@@ -294,10 +301,10 @@ A `192.168.0.0/24` **full-subnet resource** is also defined, granting remote cli
 
 | ID | Risk | Severity | Status |
 |---|---|---|---|
-| R-01 | **No working backups.** No job configured; the one attempt (`n8n-backup-20260802.sql`, VM 102) is **0 bytes**; the documented target `local` has 77 GB free vs 127 GB of VM data; both storages share one physical disk with ~44,800 power-on hours | **Critical** | Open |
+| R-01 | **No Tier 2 (full VM image) backups.** `local` has 77 GB free against 127 GB of VM data, and both storages share one physical disk with ~44,800 power-on hours. A disk failure loses every VM. **Tier 1 resolved 2026-08-12** — configuration and the n8n database (0.42 MB) now replicate off-host to the MSI Katana laptop via `scripts/Backup-Tier1.ps1`. See §7.10 | **High** | **Partially resolved 2026-08-12** — Tier 1 done, Tier 2 blocked on hardware |
 | R-02 | Metasploitable2 attached to `vmbr0` with no isolation, alongside management, DNS, and workstations. Currently **stopped** — latent, not active | **Critical (latent)** | Open |
-| R-03 | `N8N_ENCRYPTION_KEY` and the Caddy root CA key are unbacked-up; loss of either is unrecoverable | **Critical** | Open |
-| R-04 | **VM 105 root fs 82% full (5.5 GB free) on a 64 GB disk** — LVM never extended past 31 GB. Disk exhaustion stops n8n and Terry | **High** | Open |
+| R-03 | Caddy internal root CA **private key** is unbacked-up (Docker volume, VM 102, `/dev/sda`). Loss forces a new root CA and a trust-store re-import on every client. `N8N_ENCRYPTION_KEY` **resolved 2026-08-12** — copy stored in Bitwarden | Medium | **Downgraded 2026-08-12** — deliberately accepted, see §7.9 |
+| R-04 | VM 105 root fs 82% full (5.5 GB free) on a 64 GB disk — LVM never extended past 31 GB. Disk exhaustion stops n8n and Terry | **High** | **Resolved 2026-08-12** — `lvextend`/`resize2fs` online to 62 GB; now 41% used, 35 GB free |
 | R-05 | n8n `:5678` reachable from any host on the segment; **cannot be fixed by an OPNsense rule** (§3.2) — requires a host-level control | High | Open |
 | R-06 | VM 102 concentrates TLS termination, media, container management, and a vulnerable web app | High | Deferred → §7.1, §7.2 |
 | R-07 | Twingate full-subnet resource contradicts the per-resource model; 2 of 6 resources point at dead endpoints | High | Open |
@@ -306,6 +313,8 @@ A `192.168.0.0/24` **full-subnet resource** is also defined, granting remote cli
 | R-10 | Stale `~/docker/pihole/docker-compose.yml` on VM 102. If started, a second DNS server would contend with the Pi | Medium | **Resolved 2026-08-11** — renamed to `.disabled` |
 | R-11 | The consumer router is the real perimeter and is entirely undocumented | Medium | Open |
 | R-12 | 12 vCPU allocated against 4 threads; 6.6 GiB RAM headroom | Low | Accepted |
+| R-13 | **`DVWA` and `portainer` on VM 102 have no compose file** — started with `docker run`, so their configuration exists only as Docker daemon state. Nothing describes how to recreate them. Direct blocker for IaC conversion; `docker inspect` output is captured in Tier 1 backups as a stopgap | Medium | Open |
+| R-14 | Tier 1 archives hold secrets (`N8N_ENCRYPTION_KEY`, database credentials, Proxmox guest configs that may carry cloud-init passwords) on a laptop where **BitLocker is confirmed OFF** (2026-08-12: `Protection Off`, no key protectors, 931 GB decrypted). **Mitigated 2026-08-12** — archives are 7-Zip AES-256 with encrypted headers, and the backup script encrypts every run and deletes plaintext staging. Residual risk is the DPAPI-stored password and a brief staging window (§7.11) | Medium | **Mitigated 2026-08-12** |
 
 ---
 
@@ -354,9 +363,77 @@ Sequenced for zero Terry downtime. Steps 1–2 are additive and reversible:
 6. Rename OS hostnames on `docker`, `twingate`, `opnsense`.
 7. Soak two weeks, then drop the `.local` records and the second Caddy site address.
 
-**Terry is not at risk.** It is schedule-triggered (`0 */6 * * *`) with entirely outbound nodes (SerpAPI, Anthropic API, Telegram send), has no webhook trigger, and uses no OAuth credentials — so no redirect URI depends on the hostname. Only editor access is affected.
+**Terry is not at risk.** It is schedule-triggered (`0 */6 * * *`, and currently deactivated — activated on demand) with entirely outbound nodes (SerpAPI, Anthropic API, Telegram send), has no webhook trigger, and uses no OAuth credentials — so no redirect URI depends on the hostname. Only editor access is affected.
 
 **Do not rename the Proxmox node.** Node renames touch `/etc/pve` node directories and are a known footgun. Change only its DNS record.
+
+### 7.9 Caddy root CA key — risk accepted, not mitigated
+
+The internal root CA private key is **deliberately not backed up** (decision 2026-08-12).
+
+Backing up a private key means creating a second permanent copy of a Tier-0 secret — extracting it from the volume, moving it across a filesystem, storing it in a vault. That exposure is only worth paying for if the loss it prevents is expensive.
+
+At present it is not. The root is trusted by **one client** (the Windows workstation) and fronts **one proxied service** (n8n). If the `caddy_caddy_data` volume is lost, Caddy regenerates a root automatically on next start and recovery is a single trust-store re-import — roughly five minutes of work.
+
+**Revisit trigger:** 3 or more trusting clients, **or** 4 or more proxied services. The second condition deliberately coincides with the §7.2 trigger for relocating Caddy to its own VM — both should be reconsidered in the same pass, since a dedicated Caddy host changes where the key lives anyway.
+
+Until then this is an accepted risk, not an outstanding task. **Do not "fix" it without re-reading this section.**
+
+### 7.10 Backup strategy — two tiers
+
+Backup is split by what is *irreplaceable* versus what is merely *large*. Conflating the two is why this lab had no backups for months: 127 GB looked unsolvable without hardware, so nothing got done — while the part that actually mattered was under half a megabyte.
+
+| | **Tier 1 — configuration & data** | **Tier 2 — full VM images** |
+|---|---|---|
+| Size | **0.42 MB** | ~127 GB |
+| Contents | n8n PostgreSQL dump, compose files, Caddyfile, Caddy root CA *certificate*, Proxmox guest configs, network config, `docker inspect` for R-13 containers | `vzdump` of all six guests |
+| Destination | **MSI Katana laptop** — genuinely separate hardware | None available |
+| Mechanism | `scripts/Backup-Tier1.ps1`, scheduled daily, **7-Zip AES-256 encrypted** (§7.11) | — |
+| Status | ✅ **Implemented 2026-08-12** | ❌ Blocked on hardware |
+
+**Tier 1 mechanism.** The script pulls over SSH, validates the PostgreSQL dump (size plus the `PostgreSQL database dump complete` marker — a 0-byte dump is indistinguishable from a real one in `ls`, which is exactly how a fake backup went unnoticed from 2026-08-02 to 2026-08-12), writes a manifest recording what was captured and what was missed, and retains the last 14 runs. It refuses to run if its destination is inside the git repository.
+
+**Tier 1 gaps.** Pi-hole, Wazuh, and OPNsense are not covered — no SSH key access (§7.6). Recorded in every run's manifest rather than left implicit.
+
+**Why Tier 2 is deferred, and why that is defensible.** Tier 2 requires storage hardware that does not exist, and relocating backups to `local-lvm` would not help — both storages sit on the same `/dev/sda` (§1.2).
+
+More importantly: **the IaC migration is what makes Tier 2 optional.** A VM image backup exists to answer "how do I get this service back?" If every service can be rebuilt from this repository plus 0.42 MB of Tier 1 data, that question is already answered — without 127 GB of images. Tier 2 restores a machine; Tier 1 plus IaC restores a *system*, and does it on hardware that need not match.
+
+That reframes the IaC work from a portfolio exercise into the lab's actual disaster-recovery strategy. Its completeness is measured by one question: **how much of this lab could be rebuilt from the repository alone?** Today that is one service — n8n — and only once its restore procedure has been executed rather than merely written.
+
+**Recovery caveat, stated plainly.** Proxmox guest configs are reference material, not bootable images. They rebuild the *definition* of a VM, not its disk contents. Everything except n8n currently depends on documentation quality for recovery, not on captured data.
+
+**Tier 1 is verified, not assumed (2026-08-12).** The n8n leg was tested end to end using the actual off-host artifact — VM 105 → laptop → back to VM 105 → restored into an isolated stack → credentials decrypted. `psql` exit 0, zero errors, 4 workflows, 5 credentials, and `n8n export:credentials --decrypted` exit 0. Production was untouched throughout. Procedure and results: `n8n-ai-agents/README.md` §7; harness at `~/n8n-stack/scripts/restore-verification.sh` on VM 105. **Re-verify quarterly — next due 2026-11-12.**
+
+This makes n8n the only service in the lab with a *demonstrated* recovery path. Every other service is recoverable in theory, on the strength of documentation nobody has tested. Closing that gap is what the IaC roadmap is for.
+
+### 7.11 Tier 1 archive encryption (R-14) — implemented
+
+Tier 1 archives contain `N8N_ENCRYPTION_KEY`, database credentials, and Proxmox guest configs. BitLocker is **confirmed off** on the MSI Katana, and the machine runs Windows 11 Home, which does not include full BitLocker; Device Encryption depends on hardware support that gaming laptops frequently lack.
+
+**Decision: encrypt the archive, not the disk.** This is a 0.42 MB problem, not a 931 GB one — a Windows Pro upgrade to protect half a megabyte is the wrong trade.
+
+**Implemented 2026-08-12:**
+
+| | |
+|---|---|
+| Cipher | 7-Zip AES-256, `-mhe=on` (**headers encrypted — filenames hidden, not just contents**) |
+| Verified | `7z l` with a wrong password cannot even list the archive |
+| Automation | `scripts/Backup-Tier1.ps1` stages to `%TEMP%`, packs, **verifies the archive opens**, then deletes the plaintext staging |
+| Password | DPAPI-protected file, decryptable only by this Windows user on this machine. Master copy in Bitwarden |
+| Fail-safe | The script **refuses to run** if 7-Zip or the password file is missing. It never falls back to writing plaintext |
+
+**Why the script had to change, not just the folder.** Encrypting the existing archive by hand fixed one artifact. The scheduled task would have recreated a plaintext directory at 09:00 the next morning and every morning after — the mitigation would have silently reverted while the documentation claimed the risk was closed. **A recurring job needs the control inside the job.**
+
+**Residual risk, stated honestly:**
+
+1. **The password is reachable by anyone who compromises the Windows account.** DPAPI ties it to the user profile, so an offline disk thief cannot read it without the account credentials — a real improvement over plaintext — but it is not equivalent to a password that exists only in your head. Unattended automation and maximum secrecy are genuinely in tension here; this trade buys daily backups.
+2. **There is a brief plaintext window** in `%TEMP%` during each run, roughly ten seconds. Unavoidable — `scp` must land files somewhere before they can be packed.
+3. **7-Zip takes the password as a command-line argument**, so it is briefly visible in the process list to a local user.
+
+> **The password must not live in Vaultwarden after the §7.5 migration.** Vaultwarden would run on the lab; if the lab is lost you need the archive to rebuild it, and its password would be locked inside the thing being rebuilt. Bitwarden cloud breaks that circle today. Any future store for this password must sit outside the lab's failure domain.
+
+**Setup, one time:** `.\Backup-Tier1.ps1 -SetPassword`. Until this runs, the scheduled task exits non-zero and produces no backup — deliberately failing closed rather than open.
 
 ---
 
@@ -386,9 +463,14 @@ Option B resolves the critical risk with the smallest blast radius and no exposu
 
 State in §1.1, §1.2, §4, and §5 was verified by read-only SSH queries against `pve`, `vm102`, and `n8n` on 2026-08-11 (`qm list`, `qm config`, `pvesm status`, `free`, `df`, `docker ps`, `docker volume ls`). n8n environment variables were enumerated **by name only** — no values were read or recorded.
 
-**Not yet verified:** CT 103 (needs `pct list`), OPNsense NIC passthrough configuration, the Pi-hole record set, and the Wazuh agent roster.
+A second read-only pass on 2026-08-12 covered VM 105 (LVM, filesystem, Docker state, PostgreSQL size, workflow inventory), VM 102 (config file discovery), and Proxmox (`pct list`, guest config enumeration). n8n environment variables remain enumerated **by name only**.
+
+**Not yet verified:** OPNsense NIC passthrough configuration, the Pi-hole record set, and the Wazuh agent roster — all three blocked on host access (§7.6).
 
 | Date | Change |
 |---|---|
 | 2026-08-11 | Document created. `.local` → `.internal` decision recorded (§7.8). OPNsense traffic-path reality documented per §3.3. Live-host verification pass. Provenance tagging added to §4.1. Deferred work §7.1/§7.2 added. |
 | 2026-08-11 | VM 102 follow-up: R-10 resolved (stale Pi-hole compose disabled); Jellyfin confirmed `network_mode: host`; Caddyfile read and recorded — one proxied service. |
+| 2026-08-12 | **n8n restore verified end to end (§7.10)** — the off-host artifact was restored into an isolated stack and all five credentials decrypted (`export:credentials --decrypted` exit 0); production untouched. n8n becomes the first service with a demonstrated recovery path; quarterly re-verification set for 2026-11-12. **R-14 mitigated** — BitLocker confirmed off on the MSI Katana, so Tier 1 archives are encrypted instead: existing archive packed with 7-Zip AES-256 and encrypted headers (verified unlistable without the password), and `Backup-Tier1.ps1` rewritten to encrypt every run, verify the archive opens, delete plaintext staging, and refuse to run rather than fall back to plaintext. **§7.11** records the residual risks and the Vaultwarden circular-dependency warning. Google Gemini credential discovered and documented. |
+| 2026-08-12 | **Tier 1 backup implemented (§7.10)** — `scripts/Backup-Tier1.ps1` replicates 0.42 MB of configuration and the n8n database off-host to the MSI Katana laptop, scheduled daily, with dump validation and a per-run manifest. **R-01 downgraded to partially resolved.** CT 103 verified as `twingate-connector` via `pct list`. **R-13 added** — `DVWA` and `portainer` have no compose file and exist only as daemon state. **R-14 added** — backup archive holds plaintext secrets on a laptop of unverified encryption status. `SERVICE-TEMPLATE.md` adopted; `n8n-ai-agents/` converted as the reference implementation with a sanitized `docker-compose.example.yml` and `.env.example`. |
+| 2026-08-12 | **R-04 resolved** — VM 105 logical volume extended 31 → 62 GB online (`lvextend -l +100%FREE` / `resize2fs`), no downtime, no container restarts. **R-01 corrected:** a valid 405 KB `pg_dump` exists on VM 105; the 0-byte file is a separate failed attempt on VM 102. Verified PostgreSQL at 15 MB (execution history is not a growth risk) and 0 B Docker-reclaimable. All four n8n workflows confirmed `active = false` by design. Ollama retention confirmed as deliberate (§4.1). |

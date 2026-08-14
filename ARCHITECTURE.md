@@ -135,9 +135,28 @@ All lab-to-lab traffic is **direct Layer 2 over `vmbr0`** — same subnet, no ro
 3. **Metasploitable2 is attached to `vmbr0` with no isolation.** It is currently *stopped*, so the exposure is latent rather than active — but it rejoins the flat segment the moment it boots, alongside Proxmox management, Pi-hole, and personal workstations (R-02).
 4. **No OPNsense rule can filter traffic between two `192.168.0.0/24` hosts.** Any such control must be host-level (R-05).
 
-**A practical symptom:** the OPNsense web UI is unreachable from the workstation. That is not a fault — the UI binds to LAN (`192.168.1.1`) and blocks WAN by default, and the workstation sits on the WAN side. Administer it via **Proxmox → VM 100 → Console**. Do not use `pfctl -d`.
-
 OPNsense is currently a **learning appliance, not a security control.** It is documented as such so no one mistakes it for enforcement.
+
+### 3.4 OPNsense management access — corrected 2026-08-14
+
+> **This document previously recorded the wrong cause.** It stated the web UI was unreachable because "the UI binds to LAN (`192.168.1.1`) and blocks WAN by default." That is **incorrect — OPNsense binds the GUI to all interfaces.** The claim is preserved here rather than deleted, because a plausible-sounding wrong diagnosis is exactly what sends the next person down the same dead end.
+
+**The actual cause:** **"Block private networks" was enabled on the WAN interface.** That setting generates an implicit block rule **above every user-defined rule**, dropping all `192.168.0.0/24` traffic — ICMP included — before any pass rule was evaluated.
+
+**The topology is inverted, and this is the key to reading this firewall's configuration.** `em1` — which OPNsense calls **WAN** — sits at `192.168.0.22/24` and faces the *trusted* home network. `em0` (**LAN**) is `192.168.1.1/24`, the isolated lab segment. The names mean the opposite of what they normally do here.
+
+Consequently **a WAN rule permitting management access is correct in this deployment**, though it would read as a serious misconfiguration anywhere else. Anyone auditing this config without the inversion in mind will flag it as a finding. **Do not "fix" it without re-reading this section.**
+
+**Resolved 2026-08-14:**
+
+- "Block private networks" disabled on WAN
+- Two WAN pass rules added — source `192.168.0.0/24`, destination *WAN address*, **TCP 443** and **TCP 22**
+- *Permit root user login* enabled under System → Settings → Administration, then *Permit password login* disabled after key deployment — **root SSH is now key-only**
+- GUI admin/root password changed and stored in Bitwarden
+
+The Proxmox console is no longer the only administration path. Lockout recovery, and a significant gotcha about how OPNsense manages `authorized_keys`, are in §7.6.
+
+**Management reachability is not enforcement.** §3.3 still holds — OPNsense remains outside every traffic path. This section changed how it is *administered*, not what it *protects*.
 
 ---
 
@@ -283,6 +302,8 @@ Proxmox and OPNsense are configured with `8.8.8.8` directly, bypassing Pi-hole �
 | Caddy root CA key | Docker volume on VM 102 | ⚠️ Not backed up |
 | Twingate access token | Consumed at connector install | — |
 | Wazuh admin credentials | Bitwarden | Rotation pending (§7.6) |
+| OPNsense GUI / root | Bitwarden | ✅ Changed 2026-08-14. Root SSH is **key-only** — password login disabled (§3.4) |
+| SSH keys for `pihole`, `wazuh`, `opnsense` | MSI Katana | ⚠️ On a disk without full-disk encryption (R-14). Not the future Ansible key, which is separate (R-15) |
 
 **No secret, key, token, or password belongs in this repository. Ever.**
 
@@ -381,8 +402,45 @@ Verified after `docker compose up -d ollama`: TCP refused and HTTP `000` from VM
 ### 7.5 Vaultwarden self-host migration
 Move off Bitwarden cloud. **Prerequisite: R-01 must be resolved first** — self-hosting a password manager without working backups converts a cloud dependency into an unrecoverable one.
 
-### 7.6 Administrative access paths for Wazuh and OPNsense
-Wazuh admin credentials require rotation — use the documented `wazuh-passwords-tool.sh` procedure, run from the Proxmox console. OPNsense is administered from the Proxmox console rather than over the network, which is a direct consequence of §3.3. Both are console-first by design; record the resulting credentials in Bitwarden.
+### 7.6 Administrative access paths — SSH resolved 2026-08-14
+
+All three previously "unreachable" hosts now have SSH key access. Verified by hand.
+
+| Host | Alias | Prior belief | Verified reality |
+|---|---|---|---|
+| Pi-hole | `pihole` — `leon@192.168.0.50` | blocked | **Key auth already worked.** `ssh -v` confirms `publickey` with the existing ed25519 key. It was never blocked; no console or physical access was needed |
+| Wazuh | `wazuh` — `leon@192.168.0.27` | blocked, console required | Password-only. Public key deployed **over SSH**, re-verified as `publickey`. No Proxmox console needed |
+| OPNsense | `opnsense` — `root@192.168.0.22` | blocked | The only genuine blocker — and its recorded *cause* was also wrong (§3.4). Now key-only root SSH |
+
+**Two of the three were never blocked in the way this document claimed.** The obstacle was assumed and never tested, and that assumption propagated into the backup design, the risk register, and the IaC roadmap, where it was promoted to "the highest-leverage item." Recorded plainly because the cost of an untested assumption is exactly the point this repository keeps making about restore procedures.
+
+**SSH aliases on the MSI Katana** — `IaC-MIGRATION.md` Phase 1 keys its inventory against these:
+
+```
+proxmox · vm102 · n8n · pihole · wazuh · opnsense
+```
+
+**Still outstanding:** Wazuh admin credentials require rotation via the documented `wazuh-passwords-tool.sh` procedure; record the result in Bitwarden. The OPNsense GUI/root password was changed 2026-08-14 and is already in Bitwarden.
+
+#### OPNsense `authorized_keys` is GUI-managed — operational gotcha
+
+**Appending to `/root/.ssh/authorized_keys` over SSH does not persist.** Applying any change in the GUI re-runs the configuration scripts, which rewrite that file from `config.xml` and silently discard manual edits. Nothing errors; the key is simply gone.
+
+The authoritative location is **System → Access → Users → root → Authorized keys**.
+
+This is a hard constraint on automation. An Ansible task using `ansible.posix.authorized_key` against OPNsense will report success and then be reverted at the next GUI apply — the worst kind of failure, because it is silent and delayed. It reinforces excluding OPNsense from IaC entirely (`IaC-MIGRATION.md` §8): its state lives in one XML blob, and Ansible fights the platform instead of managing it.
+
+#### Lockout recovery — OPNsense
+
+If management access is lost again:
+
+1. **Proxmox → VM 100 → Console → option 8** (Shell)
+2. `pfctl -d` — disables the packet filter and reopens access
+3. `configctl filter reload` — rebuilds the ruleset from saved config **and re-enables pf in one step**
+
+**Do not use `pfctl -e`.** It re-enables pf with the previously loaded ruleset — which is the ruleset that caused the lockout.
+
+**While pf is disabled, all filtering and NAT on that box are off.** Anything on `192.168.1.0/24` is unprotected and has no internet path, so treat this as a brief maintenance window, not a working state.
 
 ### 7.7 `WEBHOOK_URL` deprecation review
 `WEBHOOK_URL` and `N8N_PROXY_HOPS` are set; `N8N_EDITOR_BASE_URL` is not. Confirm the correct configuration against the n8n 2.31.4 release notes before changing anything. `N8N_SECURE_COOKIE` can likely be removed now that access is HTTPS-only — it governs the editor session only and cannot affect Terry.
@@ -437,7 +495,7 @@ Backup is split by what is *irreplaceable* versus what is merely *large*. Confla
 
 **Tier 1 mechanism.** The script pulls over SSH, validates the PostgreSQL dump (size plus the `PostgreSQL database dump complete` marker — a 0-byte dump is indistinguishable from a real one in `ls`, which is exactly how a fake backup went unnoticed from 2026-08-02 to 2026-08-12), writes a manifest recording what was captured and what was missed, and retains the last 14 runs. It refuses to run if its destination is inside the git repository.
 
-**Tier 1 gaps.** Pi-hole, Wazuh, and OPNsense are not covered — no SSH key access (§7.6). Recorded in every run's manifest rather than left implicit.
+**Tier 1 gaps.** Pi-hole, Wazuh and OPNsense are still not captured, but **the reason changed on 2026-08-14**: SSH key access now exists for all three (§7.6), so the blocker is gone and only the work remains. `scripts/Backup-Tier1.ps1` has not been extended to collect them yet, and **its header comment and per-run manifest still describe these hosts as inaccessible — that text is now stale** and must be corrected when the collection is added. Every run's manifest records the omission rather than leaving it implicit.
 
 **Why Tier 2 is deferred, and why that is defensible.** Tier 2 requires storage hardware that does not exist, and relocating backups to `local-lvm` would not help — both storages sit on the same `/dev/sda` (§1.2).
 
@@ -509,7 +567,7 @@ State in §1.1, §1.2, §4, and §5 was verified by read-only SSH queries agains
 
 A second read-only pass on 2026-08-12 covered VM 105 (LVM, filesystem, Docker state, PostgreSQL size, workflow inventory), VM 102 (config file discovery), and Proxmox (`pct list`, guest config enumeration). n8n environment variables remain enumerated **by name only**.
 
-**Not yet verified:** OPNsense NIC passthrough configuration, the Pi-hole record set, and the Wazuh agent roster — all three blocked on host access (§7.6).
+**Not yet verified:** OPNsense NIC passthrough configuration, the Pi-hole record set, and the Wazuh agent roster. **No longer blocked** — SSH key access to all three hosts was established 2026-08-14 (§7.6). These are now simply unverified rather than unreachable, and nothing prevents verifying them in the next pass.
 
 | Date | Change |
 |---|---|
@@ -524,3 +582,4 @@ A second read-only pass on 2026-08-12 covered VM 105 (LVM, filesystem, Docker st
 | 2026-08-14 | **R-16 mitigated the same day it was found.** Maintainer confirmed the `ollamaApi` credential reads `http://ollama:11434`, so the published mapping was unused; `ports:` removed from `~/n8n-stack/docker-compose.yml` (backup kept at `docker-compose.yml.bak-20260814`), YAML validated, and only the `ollama` container recreated. **Verified both directions** — TCP refused and HTTP `000` from VM 102, model inventory still served to the `n8n` container over the compose network, 2.7 GB model volume intact, and `n8n` / `n8n-postgres` uptime unbroken at 2 and 3 weeks. The compose example was updated a second time: it had just been corrected to *document* the exposure, and now records its removal instead, with an explicit instruction not to re-add the mapping. §7.4 split into a closed Ollama subsection and an open n8n `:5678` subsection — the latter cannot be unpublished because Caddy proxies to it from VM 102, so it needs `ufw` scoped to `192.168.0.25` instead. |
 | 2026-08-14 | **R-13 partially resolved** — `DVWA` and `portainer` reconstructed from `docker inspect` into `docker/dvwa.example.yml` and `docker/portainer.example.yml`, both **pinned by digest** since neither image publishes a version label. Verified with `git check-ignore -v` that `!**/*.example.yml` rescues both, rather than assuming it. **Neither has been deployed from its file, so R-13 is not closed** — an unexecuted reconstruction is a hypothesis (`IaC-MIGRATION.md` §4.3). Two findings recorded: **Portainer bind-mounts `/var/run/docker.sock` read-write**, making its credentials root-equivalent on VM 102 and putting Caddy's internal CA key within reach of whoever holds them — R-06 updated from an abstract "concentrates" to this concrete mechanism; and **DVWA has no volumes**, so adopting compose there is risk-free while Portainer's `portainer_data` requires `external: true` or Compose starts it empty. |
 | 2026-08-14 | **R-13 resolved — both reconstructions proven by deployment.** The repo files were copied to VM 102, md5-verified byte-identical, and used to recreate both containers, so what runs is what is committed. DVWA first (no volumes, nothing to lose), then Portainer. **Portainer's data survived**: only `portainer_data` exists afterwards, `GET /api/users/admin/check` returned 204 and the InstanceID persisted. Note for future verification — `portainer.db`'s checksum **does** change across a restart (BoltDB rewrites its meta page on open), so a file hash is the wrong retention test; the admin-check endpoint is the right one. Two corrections to earlier claims: **Portainer's version is 2.39.1**, readable from `/api/status` even though the image carries no version label, so "no label" does not imply "undiscoverable"; and **compose moved DVWA onto its own network**, which blocks direct container-to-container access to Portainer but **is not containment** — the published-port path remains open from `172.17.0.1:9443` and `192.168.0.25:9443`, both confirmed. Caddy, Jellyfin and secplus-drill were untouched throughout. |
+| 2026-08-14 | **SSH access established to all three previously "blocked" hosts, and a recorded root cause corrected.** Verified by hand by the maintainer. **Pi-hole key auth already worked** — `ssh -v` authenticates via `publickey` with the existing ed25519 key; it was never blocked, the obstacle was assumed and never tested. **Wazuh** was password-only; the public key was deployed over SSH and re-verified, with no Proxmox console needed. **OPNsense was the only genuine blocker — and §3.3's stated cause was wrong.** The GUI does not bind only to LAN; OPNsense binds it to all interfaces. The real cause was **"Block private networks" on WAN**, which generates an implicit block rule above all user-defined rules and dropped every `192.168.0.0/24` packet, ICMP included. Fixed by disabling that setting and adding two WAN pass rules (source `192.168.0.0/24`, destination WAN address, TCP 443 and 22); root login enabled then restricted to **key-only**; GUI password changed into Bitwarden. New **§3.4** documents the **WAN/LAN inversion** — `em1`/WAN faces the trusted home network while `em0`/LAN is the isolated lab segment — because a WAN rule permitting management reads as a misconfiguration without that context. §7.6 rewritten with the access matrix, the six SSH aliases, the **GUI-managed `authorized_keys` gotcha** (manual edits are silently overwritten from `config.xml` on any GUI apply, so `ansible.posix.authorized_key` will be reverted), and a **lockout recovery procedure** (`pfctl -d`, then `configctl filter reload`; never `pfctl -e`). The prior "do not use `pfctl -d`" instruction was wrong and is reversed. Downstream claims corrected in §7.10 and §9. |

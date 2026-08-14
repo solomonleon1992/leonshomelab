@@ -22,24 +22,26 @@ So completeness is measured by exactly one question:
 
 | Service | Documented | Reproducible | Rebuild tested |
 |---|---|---|---|
-| n8n stack | ✅ | ❌ — `:latest` | ❌ *(restore ≠ rebuild, see below)* |
+| n8n stack | ✅ | ✅ digest-pinned | ❌ *(restore ≠ rebuild — see below)* |
+| DVWA | ⚠️ compose only, no README | ✅ digest-pinned | ❌ — redeployed in place 2026-08-14, not on fresh hardware |
+| Portainer | ⚠️ compose only, no README | ✅ digest-pinned | ❌ — redeployed in place 2026-08-14, not on fresh hardware |
 | Caddy | ⚠️ Caddyfile recorded | ❌ | ❌ |
 | Jellyfin | ⚠️ | ❌ | ❌ |
 | `secplus-drill` | ⚠️ | ❌ | ❌ |
-| DVWA | ❌ no compose (R-13) | ❌ | ❌ |
-| Portainer | ❌ no compose (R-13) | ❌ | ❌ |
 | Pi-hole | ⚠️ | ❌ | ❌ |
 | Wazuh | ⚠️ | — out of scope (§8) | — |
 | OPNsense | ⚠️ | — out of scope (§8) | — |
 
-**Honest score: zero services are reproducible today.** Including n8n.
+**Honest score as of 2026-08-14: three services are reproducible on paper, none has passed the rebuild test.**
 
-That contradicts §7.10's claim that n8n is "the only service with a demonstrated recovery path" — and both statements are true, because they measure different things:
+Three compose files now pin every image by digest, so the repository can finally state what it builds — that closes the *reproducibility* half. The *rebuild* half is untouched. DVWA and Portainer were recreated from their repo files, which proves those files are accurate, but it happened **on the existing host with its existing state**. That is not the same as reconstituting a service from the repository alone on hardware that need not match.
+
+**Production still runs floating tags on every host.** The pins live in the repo, not on the machines (R-09, §4.2).
+
+This is why §7.10's claim that n8n is "the only service with a demonstrated recovery path" and this table's ❌ column are both true — they measure different things:
 
 - **Restore** = bring back *this* instance from *its* data. n8n passes; verified 2026-08-12.
-- **Rebuild** = construct a working instance from the repository, on hardware that need not match. n8n fails.
-
-n8n fails the rebuild test for one reason: `image: n8nio/n8n:latest`. Rebuilding tomorrow yields whatever `latest` resolves to, not 2.31.4. See §4.2.
+- **Rebuild** = construct a working instance from the repository, on hardware that need not match. **No service passes this yet.**
 
 ---
 
@@ -112,15 +114,29 @@ Tracked as **R-15** in `ARCHITECTURE.md`.
 
 **No IaC is written until these are closed.** Each one makes downstream work either impossible or wrong.
 
-### 4.1 SSH key access — Pi-hole, Wazuh, OPNsense
+### 4.1 SSH key access — Pi-hole, Wazuh, OPNsense ✅ CLOSED 2026-08-14
 
-Ansible is SSH-based. Without keys, these three hosts cannot be managed, verified, or backed up.
+> **This section previously called SSH access "the highest-leverage item in the entire roadmap," blocking four other workstreams. That assessment was wrong.** It is corrected rather than deleted, because the way it was wrong is the more useful lesson.
 
-Already blocking: 3 Tier 1 backup sources (§7.10), Wazuh credential rotation (§7.6), the `.local` → `.internal` cutover (§7.8), and three "not yet verified" items in §9 — all references to `ARCHITECTURE.md`.
+Verified by hand on 2026-08-14:
 
-**This is the highest-leverage item in the entire roadmap** — it is the only one that unblocks work in four other places.
+| Host | Alias | Assumed | Actual |
+|---|---|---|---|
+| Pi-hole | `pihole` — `leon@192.168.0.50` | blocked | **Key auth already worked.** `ssh -v` authenticates via `publickey` using the existing ed25519 key. Never blocked; no console or physical access needed |
+| Wazuh | `wazuh` — `leon@192.168.0.27` | blocked, console required | Password-only. Public key deployed **over SSH**, re-verified as `publickey`. No Proxmox console needed |
+| OPNsense | `opnsense` — `root@192.168.0.22` | blocked | The only real blocker — **and its recorded cause was also wrong.** Not a LAN-bound GUI; "Block private networks" on WAN was dropping everything. See `ARCHITECTURE.md` §3.4. Now key-only root SSH |
 
-*OPNsense caveat:* FreeBSD with a locked-down default shell. Enable SSH with key auth from the Proxmox console (`ARCHITECTURE.md` §3.3 — it is not reachable over the network from the workstation).
+**Two of the three were never blocked.** The obstacle was assumed and never tested, then propagated into the backup design, the risk register, and this roadmap — where it was promoted to the single most important task.
+
+**An unverified blocker is not a blocker, it is a hypothesis.** That is the same standard this document already applies to restore procedures (§9.1) and reconstructions (§4.3); it simply had not been applied to the blockers themselves. Before ranking any future item as high-leverage, test that it is actually blocked.
+
+**SSH aliases now configured on the Katana** — Phase 1 keys its inventory against these:
+
+```
+proxmox · vm102 · n8n · pihole · wazuh · opnsense
+```
+
+**One constraint carries forward.** OPNsense regenerates `/root/.ssh/authorized_keys` from `config.xml` on every GUI apply, silently discarding anything written over SSH. Key management there cannot be automated with `ansible.posix.authorized_key` — see §5 and §8.
 
 ### 4.2 Pin every image tag — R-09
 
@@ -139,11 +155,18 @@ Tag pinning (`n8nio/n8n:2.31.4`) is the working minimum. Digest pinning (`@sha25
 
 **Known today:** n8n is **2.31.4** (verified 2026-08-12). `postgres:15` and `ollama/ollama:latest` exact versions are **not yet recorded** — do not guess them; read them from the host.
 
-### 4.3 Reconstruct DVWA and Portainer compose files — R-13
+### 4.3 Reconstruct DVWA and Portainer compose files — R-13 ✅ CLOSED 2026-08-14
 
-Both were started with `docker run`; their configuration exists only as Docker daemon state. Source material is the `docker inspect` output already captured in every Tier 1 archive.
+Both were started with `docker run`, so their configuration existed only as Docker daemon state. Reconstructed from `docker inspect` into `docker/dvwa.example.yml` and `docker/portainer.example.yml`, both pinned by digest since neither image publishes a version label.
 
-Convert to `docker-compose.example.yml` per `SERVICE-TEMPLATE.md`, then **redeploy from the compose file** to prove the reconstruction is accurate. A compose file that has never been used to start the container is a guess.
+**Then redeployed from those exact files** — copied to VM 102 and md5-verified byte-identical before use, so what runs is what is committed. A compose file that has never started a container is a guess; these are not.
+
+Portainer's data survived: only `portainer_data` exists afterwards (no project-prefixed volume), `GET /api/users/admin/check` returned 204, and the InstanceID persisted.
+
+Two things worth carrying forward:
+
+- **`portainer.db`'s checksum changes across a restart** — BoltDB rewrites its meta page on open. A file hash is the wrong retention test; use the admin-check endpoint.
+- **Compose moved DVWA onto its own network**, which blocks direct container-to-container access to Portainer but **is not containment** — the published-port path stays open. Do not record it as a security improvement.
 
 ### 4.4 Accept the patching obligation this creates
 
@@ -156,8 +179,9 @@ Pinning is only complete when paired with a deliberate update cadence: monthly, 
 ## 5. Phase 1 — Control Node and Inventory
 
 1. `wsl --install` on the Katana; reboot; install Ansible in the distro.
-2. Generate the dedicated, **passphrase-protected** Ansible key (§3.2). Distribute public keys to all managed hosts.
-3. Create `ansible/inventory.yml` keyed on the **exact Proxmox guest names** in `ARCHITECTURE.md` §4 — `OPNsense`, `Metasploitable2`, `Docker-Host`, `twingate-connector`, `Wazuh-SIEM`, `n8n-ai-stack`. Do not invent new names; the architecture document is authoritative and any automation must key on the same identifiers.
+2. Generate the dedicated, **passphrase-protected** Ansible key (§3.2) and distribute the public key to all managed hosts.
+   - **OPNsense is the exception.** Install its key through **System → Access → Users → root → Authorized keys** in the GUI. Writing to `authorized_keys` over SSH appears to work and is then silently discarded on the next GUI apply (§4.1).
+3. Create `ansible/inventory.yml` keyed on the **exact Proxmox guest names** in `ARCHITECTURE.md` §4 — `OPNsense`, `Metasploitable2`, `Docker-Host`, `twingate-connector`, `Wazuh-SIEM`, `n8n-ai-stack`. Do not invent new names; the architecture document is authoritative and any automation must key on the same identifiers. The six existing SSH aliases (§4.1) map onto these and can be used directly as `ansible_host` values.
 4. Verify with a read-only fact-gathering run against every host before writing a single task:
    ```bash
    ansible all -m ansible.builtin.setup --tree /tmp/facts
@@ -206,7 +230,7 @@ Reconsider Terraform for existing guests only once Tier 2 backups exist (R-01 fu
 | Excluded | Reason | What is required instead |
 |---|---|---|
 | **Wazuh (VM 104)** | Deployed via the official all-in-one installer, which assumes ownership of the host (`ARCHITECTURE.md` §4.1). Automating it means reverse-engineering a vendor installer for a single-instance service | Config + agent roster in Tier 1; a written, **tested** restore procedure |
-| **OPNsense (VM 100)** | Configuration is a single XML blob with a native backup/restore path. Ansible adds nothing | Export `config.xml` into Tier 1; test the import path |
+| **OPNsense (VM 100)** | Configuration is a single XML blob with a native backup/restore path, and the platform **actively overwrites** files managed out-of-band: `authorized_keys` is regenerated from `config.xml` on every GUI apply, so `ansible.posix.authorized_key` succeeds and is then silently reverted (§4.1). Ansible does not merely add nothing here — it fights the platform and fails quietly | Export `config.xml` into Tier 1; test the import path. Manage users and keys in the GUI |
 | **Proxmox host itself** | Bare-metal hypervisor install. Automating it requires PXE/Packer infrastructure that does not exist and cannot pay for itself at one host | Documented install + guest configs in Tier 1 |
 | **Metasploitable2 (VM 101)** | Distributed as a fixed appliance image. Its value is being unpatched | Note the source image and checksum |
 
@@ -266,4 +290,6 @@ An honest plan accounts for the harm it can do.
 
 | Date | Change |
 |---|---|
+| 2026-08-14 | **Phase 0 SSH blocker closed — and the original assessment was wrong.** §4.1 had ranked SSH key access as "the highest-leverage item in the entire roadmap," blocking four workstreams. Hand-verification showed **Pi-hole key auth already worked** (never blocked; the obstacle was assumed and never tested) and **Wazuh needed only a key pushed over SSH**, no console. Only **OPNsense** was genuinely blocked, and `ARCHITECTURE.md`'s recorded cause for that was also wrong — the GUI is not LAN-bound; "Block private networks" on WAN was dropping all `192.168.0.0/24` traffic above every user rule. Corrected in `ARCHITECTURE.md` §3.4, which also documents the **WAN/LAN inversion** that makes a management-permitting WAN rule correct here. Six SSH aliases recorded for Phase 1 inventory. **New constraint:** OPNsense regenerates `authorized_keys` from `config.xml` on every GUI apply, so `ansible.posix.authorized_key` succeeds and is silently reverted — §5 step 2 and §8 updated, reinforcing OPNsense's exclusion from IaC. Lesson recorded in §4.1: **an unverified blocker is a hypothesis**, the same standard this document already applied to restores and reconstructions but not to its own blockers. |
+| 2026-08-14 | **§4.3 closed (R-13)** — DVWA and Portainer reconstructed and redeployed from the exact repo files; Portainer's data verified retained. **§1.1 scorecard corrected**: three services are now reproducible on paper (digest-pinned compose), where the table previously read zero, but **none has passed the rebuild test** — redeploying on the existing host is not reconstitution on fresh hardware. Production still runs floating tags regardless (R-09). |
 | 2026-08-14 | Roadmap created. Ansible-first decision recorded (§2) with Terraform deferred to greenfield (§7). Control node set to MSI Katana + WSL (§3); WSL confirmed not installed. **R-09 promoted to High / Phase-0 prerequisite** — `:latest` makes the repository unable to reproduce any service, including n8n (§4.2). **R-15 identified** — Ansible SSH key concentration on an unencrypted laptop (§3.2). Scope boundary set: Wazuh, OPNsense, Proxmox host, and Metasploitable2 excluded from IaC with a tested-restore bar instead (§8). Rebuild-vs-restore distinction defined; honest current score is zero reproducible services (§1.1). |

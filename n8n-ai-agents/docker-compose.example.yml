@@ -9,10 +9,16 @@
 # 2026-08-12. No values were read. The live file is blocked by .gitignore
 # because it stores secrets inline.
 #
-# It differs from the live file in one deliberate way: secrets are sourced
-# from a .env file instead of being written inline. That is the target
-# pattern (see .env.example). Adopting it removes the reason compose files
-# are blocked from this repo in the first place.
+# It differs from the live file in two deliberate ways. Both show the TARGET
+# pattern, not current production — neither has been applied to the host:
+#
+#   1. Secrets are sourced from a .env file instead of being written inline
+#      (see .env.example). Adopting this removes the reason compose files are
+#      blocked from this repo in the first place.
+#   2. The n8n image is PINNED to an explicit version. Production still runs
+#      `:latest`. A repository that says `:latest` cannot reproduce anything,
+#      so no service can pass the rebuild test — see R-09 and
+#      IaC-MIGRATION.md §4.2.
 # ---------------------------------------------------------------------------
 #
 # Compose project name is `n8n-stack`, which prefixes the volumes:
@@ -24,7 +30,10 @@ name: n8n-stack
 
 services:
   n8n:
-    image: n8nio/n8n:latest        # pinned to 2.31.4 in production — see R-09
+    # PINNED BY DIGEST. Resolves to n8n 2.31.4 — verified running on the host
+    # 2026-08-14. Production itself still runs `:latest`; this line shows the
+    # target and the host has NOT been changed. See R-09 / IaC-MIGRATION.md §4.2.
+    image: n8nio/n8n@sha256:15091606d98f6d15bad10cb26bb937ccb47dfd9fee2bb7ae44c7061cba2e7a04
     container_name: n8n
     restart: unless-stopped
     depends_on:
@@ -56,7 +65,15 @@ services:
       - n8n_data:/home/node/.n8n
 
   n8n-postgres:
-    image: postgres:15
+    # PINNED BY DIGEST. Resolves to PostgreSQL 15.18 (verified 2026-08-14).
+    #
+    # Restore-relevant: the Tier 1 dump carries \restrict / \unrestrict markers
+    # that require psql >= 15.18 to load; an older 15.x fails. `postgres:15`
+    # floats forward and will not regress on its own, so this pin is not
+    # guarding against a likely failure — it RECORDS the dump/server pairing
+    # known to work, which a rebuild on unfamiliar hardware cannot otherwise
+    # discover. See ARCHITECTURE.md §4 and R-09.
+    image: postgres@sha256:74e110c41804365e3915fcc09d5e7a1eff50161aaa94d5da0e58e0cd75ae509c
     container_name: n8n-postgres
     restart: unless-stopped
     # No published port — reachable only on the compose network. Do not
@@ -74,11 +91,32 @@ services:
       retries: 5
 
   ollama:
-    image: ollama/ollama:latest
+    # PINNED BY DIGEST. Resolves to ollama 0.24.0 (verified 2026-08-14).
+    #
+    # WARNING: this image's org.opencontainers.image.version label reads
+    # "24.04" — that is the Ubuntu BASE image version, not the ollama version.
+    # Do not pin from that label. Read `ollama --version` from the running
+    # container instead.
+    #
+    # Live config specifies `ollama/ollama` with no tag at all, which Docker
+    # resolves to `:latest`.
+    image: ollama/ollama@sha256:a6149234667efc71d37766d61c1a16f24c33e4cd7a0bf4125c44a7e47e2419c4
     container_name: ollama
     restart: unless-stopped
     # Reached from n8n as http://ollama:11434 — NOT localhost, which inside
     # the n8n container refers to the n8n container itself.
+    #
+    # DELIBERATELY NO `ports:` BLOCK — do not re-add one.
+    #
+    # Until 2026-08-14 this service published "11434:11434", binding 0.0.0.0
+    # and [::] and exposing a completely unauthenticated API to the whole flat
+    # segment: /api/pull (arbitrary model writes), /api/delete and
+    # /api/generate, not merely reads. Removed after confirming the `ollamaApi`
+    # credential addresses the service by name rather than by host IP.
+    #
+    # Verified after removal: refused from VM 102, still reachable from the n8n
+    # container as http://ollama:11434. Nothing outside the compose network
+    # needs to reach Ollama. See R-16 / ARCHITECTURE.md §7.4.
     volumes:
       - ollama_data:/root/.ollama
 

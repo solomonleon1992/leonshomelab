@@ -1,0 +1,64 @@
+# DVWA — sanitized example
+#
+# ---------------------------------------------------------------------------
+# THIS IS A RECONSTRUCTION, NOT A COPY.
+# DVWA has no compose file on VM 102. It was started with `docker run`, so its
+# configuration existed only as Docker daemon state (R-13). Rebuilt from
+# `docker inspect DVWA` on 2026-08-14. Image, port binding, restart policy and
+# entrypoint were read from the live container; no values were invented.
+# ---------------------------------------------------------------------------
+#
+# Deploy on VM 102 (`Docker-Host`, 192.168.0.25), suggested path ~/docker/dvwa/
+#
+# !! INTENTIONALLY VULNERABLE APPLICATION !!
+# DVWA exists to be exploited. It currently runs on the same host as Caddy,
+# which terminates TLS for the lab and holds the internal root CA private key.
+# ARCHITECTURE.md §7.1 tracks moving it onto an isolated segment; §8 sequences
+# that alongside Metasploitable2.
+
+name: dvwa
+
+services:
+  dvwa:
+    # Pinned by digest. This image publishes no `org.opencontainers.image.version`
+    # label, so a digest is the ONLY way to pin it (R-09).
+    image: vulnerables/web-dvwa@sha256:dae203fe11646a86937bf04db0079adef295f426da68a92b40e3b181f337daa7
+    container_name: DVWA
+    restart: unless-stopped
+    ports:
+      # Host 8080 -> container 80. Binds 0.0.0.0 on a flat, unfiltered segment
+      # (ARCHITECTURE.md §3.3), so every host on 192.168.0.0/24 can reach it —
+      # and every Twingate client, while the full-subnet grant stands (R-07).
+      - "8080:80"
+
+    # NETWORK BEHAVIOUR DIFFERS FROM THE ORIGINAL `docker run`.
+    # Compose creates a per-project network (`dvwa_default`, 172.21.x); the
+    # original container sat on the default bridge (172.17.x) alongside
+    # Portainer.
+    #
+    # Verified 2026-08-14 after deployment: DIRECT container-to-container
+    # access from DVWA to Portainer is now dropped by Docker's inter-network
+    # isolation. That is a real change, but it is NOT containment — DVWA still
+    # reaches Portainer through the host's published port, confirmed on both
+    # 172.17.0.1:9443 and 192.168.0.25:9443.
+    #
+    # Do not treat this as a security boundary. Real isolation is the lab
+    # segment in ARCHITECTURE.md §7.1 / §8.
+
+    # No volumes, by design.
+    #
+    # DVWA's MySQL database lives inside the container, so all state — users,
+    # uploaded files, whatever an exercise left behind — is DESTROYED on
+    # recreate. For a practice target that is a feature, not a gap:
+    #
+    #     docker compose up -d --force-recreate     # <- the reset button
+    #
+    # Do not add a volume without a specific reason. Persisting a deliberately
+    # vulnerable app's state means persisting whatever was planted in it.
+    #
+    # No custom environment variables are set; the image defaults apply, and
+    # the entrypoint (/main.sh) comes from the image.
+    #
+    # Adopting compose here is safe precisely BECAUSE there are no volumes —
+    # there is no data for a project-name mismatch to orphan. Contrast with
+    # portainer.example.yml, where that risk is real.

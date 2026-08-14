@@ -39,6 +39,8 @@ Personal homelab built on Proxmox VE for cybersecurity and self-hosting practice
 
 ## Documentation Structure
 - **[Architecture](./ARCHITECTURE.md)** - Network topology, service dependencies, placement rationale, and risk register *(authoritative — start here)*
+- **[IaC Migration](./IaC-MIGRATION.md)** - Infrastructure-as-Code roadmap: tooling decision, conversion order, and definition of done *(plan — nothing implemented yet)*
+- [Service Template](./SERVICE-TEMPLATE.md) - Documentation convention every service folder follows
 - [Hardware](./hardware/README.md) - Physical hardware specs and setup
 - [Proxmox](./proxmox/README.md) - Hypervisor installation and configuration
 - [OPNsense](./opnsense/README.md) - Firewall setup and network configuration

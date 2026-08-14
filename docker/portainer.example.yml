@@ -1,0 +1,79 @@
+# Portainer CE — sanitized example
+#
+# ---------------------------------------------------------------------------
+# THIS IS A RECONSTRUCTION, NOT A COPY.
+# Portainer has no compose file on VM 102. It was started with `docker run`, so
+# its configuration existed only as Docker daemon state (R-13). Rebuilt from
+# `docker inspect portainer` on 2026-08-14. Image, port binding, restart policy
+# and mounts were read from the live container; no values were invented.
+# ---------------------------------------------------------------------------
+#
+# Deploy on VM 102 (`Docker-Host`, 192.168.0.25), suggested path
+# ~/docker/portainer/
+#
+# ===========================================================================
+# ADOPTION WARNING — READ BEFORE THE FIRST `docker compose up`
+#
+# The live container uses a volume named exactly `portainer_data`, created by
+# the original `docker run`. Compose prefixes volume names with the project
+# name, so a project called `portainer` would look for `portainer_portainer_data`
+# — which does not exist — and Portainer would start with an EMPTY database,
+# losing every user, setting, and registered endpoint.
+#
+# The `external: true` declaration at the bottom binds to the existing volume
+# by its real name. DO NOT REMOVE IT without migrating the data first.
+#
+# Verify before first use:   docker volume ls | grep portainer
+# ===========================================================================
+#
+# DEPLOYED AND VERIFIED 2026-08-14. This file was used to recreate the live
+# container, so it is no longer a hypothesis. Results:
+#   - only `portainer_data` exists afterwards; no `portainer_portainer_data`
+#     was created, confirming `external: true` bound the existing volume
+#   - GET /api/users/admin/check returned 204 (admin user retained) and the
+#     InstanceID persisted, proving the database survived
+#   - HTTPS 9443 returned 200; ports 8000/9000 remain exposed-not-published
+#
+# Note: portainer.db's checksum DOES change across a restart. BoltDB rewrites
+# its meta page when the database is opened. Use the admin-check endpoint to
+# verify data retention, not a file hash.
+
+name: portainer
+
+services:
+  portainer:
+    # Pinned by digest. This image publishes no `org.opencontainers.image.version`
+    # label, so a digest is the ONLY way to pin it (R-09).
+    image: portainer/portainer-ce@sha256:1ae8e65d50ca5498cb2c33e617495a1e3ef245b0d2392b4a44c70ae09b822891
+    container_name: portainer
+    restart: always
+    ports:
+      # Only 9443 (HTTPS UI) is published. The image also EXPOSES 8000 and
+      # 9000, but neither is published to the host. A Twingate resource still
+      # points at 192.168.0.25:9000 and is therefore dead (ARCHITECTURE.md R-07).
+      - "9443:9443"
+    volumes:
+      - portainer_data:/data
+
+      # ---------------------------------------------------------------------
+      # ROOT-EQUIVALENT ACCESS TO VM 102.
+      #
+      # Portainer needs the Docker socket to manage containers, so this mount
+      # is by design, not a misconfiguration. The consequence is still worth
+      # stating plainly: write access to /var/run/docker.sock is equivalent to
+      # root on the host. Anyone who gains Portainer access controls every
+      # container on VM 102 — including Caddy, and therefore the internal root
+      # CA private key in `caddy_caddy_data` (ARCHITECTURE.md §5.1, §7.9).
+      #
+      # Treat Portainer credentials as host-root credentials. This is a
+      # concrete part of what R-06 means by "VM 102 concentrates" — Portainer
+      # and the intentionally vulnerable DVWA share this host and its default
+      # bridge network.
+      # ---------------------------------------------------------------------
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  portainer_data:
+    # Binds to the volume created by the original `docker run`, NOT a new
+    # project-prefixed one. See the adoption warning at the top of this file.
+    external: true

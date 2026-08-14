@@ -162,12 +162,32 @@ CT 103 is an LXC container, so it is not returned by `qm list` (QEMU only). Conf
 | Container | Image | Published ports | Defined by |
 |---|---|---|---|
 | `caddy` | `caddy:2-alpine` | 80, 443 | `~/docker/caddy/docker-compose.yml` |
-| `portainer` | `portainer/portainer-ce:latest` | **9443** (9000 exposed, *not* published) | ⚠️ **none — `docker run` (R-13)** |
+| `portainer` | `portainer/portainer-ce:latest` | **9443** (9000 exposed, *not* published) | ✅ `docker/portainer.example.yml` — **deployed from this file 2026-08-14** |
 | `jellyfin` | `jellyfin/jellyfin:latest` | `network_mode: host` — binds host interfaces directly (8096 and DLNA/discovery ports). Docker reports no mappings by design; 8096 is reachable | `~/docker/jellyfin/docker-compose.yml` |
-| `DVWA` | `vulnerables/web-dvwa:latest` | 8080 | ⚠️ **none — `docker run` (R-13)** |
+| `DVWA` | `vulnerables/web-dvwa:latest` | 8080 | ✅ `docker/dvwa.example.yml` — **deployed from this file 2026-08-14** |
 | `secplus-drill` | `nginx:alpine` | 8088 | `~/secplus-drill/docker-compose.yml` |
 
-**Two containers have no declarative definition.** `DVWA` and `portainer` were started with `docker run`; their configuration exists only as Docker daemon state. If VM 102 is lost, there is no file describing how to recreate them — `docker inspect` output is captured in the Tier 1 backup as a stopgap (§7.10). This is a direct blocker for IaC conversion (R-13).
+**Two containers were started with `docker run`** and had no declarative definition. Reconstructed from `docker inspect` on 2026-08-14, then **both were recreated from those exact files** — the repo files were copied to VM 102 and md5-verified byte-identical before use, so what runs is what is committed. **R-13 resolved.**
+
+Three things this surfaced:
+
+- **Portainer bind-mounts `/var/run/docker.sock` read-write** — root-equivalent access to VM 102, by design. Its credentials are effectively host-root credentials (R-06).
+- **DVWA has no volumes at all.** Its MySQL data lives inside the container, so `--force-recreate` is a full reset. That made adopting compose risk-free there — no data for a project-name mismatch to orphan. Portainer was the opposite case: `portainer_data` had to be declared `external: true`, and after deployment only `portainer_data` exists (no `portainer_portainer_data`), with the admin user and InstanceID retained.
+- **Compose changed DVWA's network.** It now sits on `dvwa_default` (172.21.x) rather than the default bridge, which drops *direct* container-to-container access to Portainer. **This is not containment** — DVWA still reaches Portainer through the host's published port, confirmed on both `172.17.0.1:9443` and `192.168.0.25:9443`. The R-06 adjacency is narrowed, not removed; real isolation remains §7.1 / §8.
+
+**Image versions — verified 2026-08-14.** Every image runs a floating tag (R-09); these are the versions that resolved today, not pinned guarantees.
+
+| Container | Configured tag | Running version |
+|---|---|---|
+| `caddy` | `caddy:2-alpine` | **v2.11.4** |
+| `jellyfin` | `jellyfin/jellyfin:latest` | **10.11.6** |
+| `secplus-drill` | `nginx:alpine` | **nginx/1.31.2** |
+| `portainer` | `portainer/portainer-ce:latest` | **2.39.1** — *not from an image label; read from `GET /api/status`* |
+| `DVWA` | `vulnerables/web-dvwa:latest` | *no version published anywhere* |
+
+`portainer` and `DVWA` publish no `org.opencontainers.image.version` label, so **digest pinning is the only option for both** — recorded in `docker/portainer.example.yml` and `docker/dvwa.example.yml`.
+
+Portainer is a partial exception worth noting: the *image* carries no version, but the running service reports **2.39.1** via its unauthenticated `/api/status` endpoint. Absence of an image label does not always mean the version is undiscoverable — check the application before concluding it is.
 
 Volumes: `caddy_caddy_data`, `caddy_caddy_config`, `portainer_data`.
 Configs: `~/docker/{caddy,jellyfin,pihole}/`, `~/secplus-drill/`.
@@ -188,11 +208,15 @@ The upstream is addressed **by IP**, so the `.internal` migration changes only t
 
 **VM 105 — `n8n-ai-stack` containers:**
 
-| Container | Image | Port |
-|---|---|---|
-| `n8n` | `n8nio/n8n:latest` — **running 2.31.4** | 5678 |
-| `n8n-postgres` | `postgres:15` | 5432 |
-| `ollama` | `ollama/ollama` | 11434 |
+| Container | Image (as configured) | Running version | Port exposure |
+|---|---|---|---|
+| `n8n` | `n8nio/n8n:latest` | **2.31.4** | **5678 published on `0.0.0.0` + `[::]`** — authenticated (R-05) |
+| `n8n-postgres` | `postgres:15` | **15.18** | 5432 — *not published*; compose network only |
+| `ollama` | `ollama/ollama` *(no tag — defaults to `:latest`)* | **0.24.0** | 11434 — *not published* since 2026-08-14; compose network only (**R-16 mitigated**) |
+
+Versions verified 2026-08-14; image digests recorded in `n8n-ai-agents/docker-compose.example.yml`. **All three run floating tags in production (R-09)** — these are the versions that resolved today, not guarantees.
+
+**PostgreSQL 15.18 is restore-relevant.** The Tier 1 dump carries `\restrict` / `\unrestrict` markers that require `psql` ≥ 15.18 to load; an older 15.x fails. `postgres:15` floats *forward*, so it will not regress below 15.18 on its own — the value of pinning here is not preventing a likely failure but **recording the dump/server pairing that is known to work**, which is exactly what a rebuild on unfamiliar hardware has no other way to learn.
 
 Stack dir: `~/n8n-stack/`. Root fs: **62 GB, 41% used, 35 GB free** — extended 2026-08-12, R-04 resolved.
 
@@ -306,15 +330,17 @@ A `192.168.0.0/24` **full-subnet resource** is also defined, granting remote cli
 | R-03 | Caddy internal root CA **private key** is unbacked-up (Docker volume, VM 102, `/dev/sda`). Loss forces a new root CA and a trust-store re-import on every client. `N8N_ENCRYPTION_KEY` **resolved 2026-08-12** — copy stored in Bitwarden | Medium | **Downgraded 2026-08-12** — deliberately accepted, see §7.9 |
 | R-04 | VM 105 root fs 82% full (5.5 GB free) on a 64 GB disk — LVM never extended past 31 GB. Disk exhaustion stops n8n and Terry | **High** | **Resolved 2026-08-12** — `lvextend`/`resize2fs` online to 62 GB; now 41% used, 35 GB free |
 | R-05 | n8n `:5678` reachable from any host on the segment; **cannot be fixed by an OPNsense rule** (§3.2) — requires a host-level control | High | Open |
-| R-06 | VM 102 concentrates TLS termination, media, container management, and a vulnerable web app | High | Deferred → §7.1, §7.2 |
+| R-06 | VM 102 concentrates TLS termination, media, container management, and a vulnerable web app. **Made concrete 2026-08-14:** Portainer bind-mounts `/var/run/docker.sock` **read-write**. That is by design — it is how Portainer manages containers — but write access to the Docker socket is equivalent to root on the host, so Portainer credentials are effectively VM 102 root credentials, including control of Caddy and the internal root CA private key (§5.1). DVWA sits on the same host and the same default bridge network | High | Deferred → §7.1, §7.2 |
 | R-07 | Twingate full-subnet resource contradicts the per-resource model; 2 of 6 resources point at dead endpoints | High | Open |
 | R-08 | Pi-hole is a single point of failure for household DNS, on a microSD card | Medium | Open |
-| R-09 | All images pinned to `:latest` — an unattended `docker compose pull` can move n8n off 2.31.4 without warning | Medium | Open |
+| R-09 | **All images are `:latest`.** An unattended `docker compose pull` can move n8n off 2.31.4 without warning — but the larger problem is that a repository specifying `:latest` **cannot reproduce anything**, so no service can satisfy the §7.10 rebuild test, including n8n. **Phase-0 prerequisite for the IaC migration** (`IaC-MIGRATION.md` §4.2). Closing it requires a recorded update cadence, or unpredictable updates simply become no updates | **High** | **Re-severitied 2026-08-14** — was Medium; blocks all IaC work |
 | R-10 | Stale `~/docker/pihole/docker-compose.yml` on VM 102. If started, a second DNS server would contend with the Pi | Medium | **Resolved 2026-08-11** — renamed to `.disabled` |
 | R-11 | The consumer router is the real perimeter and is entirely undocumented | Medium | Open |
 | R-12 | 12 vCPU allocated against 4 threads; 6.6 GiB RAM headroom | Low | Accepted |
-| R-13 | **`DVWA` and `portainer` on VM 102 have no compose file** — started with `docker run`, so their configuration exists only as Docker daemon state. Nothing describes how to recreate them. Direct blocker for IaC conversion; `docker inspect` output is captured in Tier 1 backups as a stopgap | Medium | Open |
+| R-13 | **`DVWA` and `portainer` on VM 102 have no compose file** — started with `docker run`, so their configuration exists only as Docker daemon state. Nothing describes how to recreate them. Direct blocker for IaC conversion; `docker inspect` output was captured in Tier 1 backups as a stopgap | Medium | **Resolved 2026-08-14** — reconstructed into `docker/dvwa.example.yml` and `docker/portainer.example.yml`, then **both containers recreated from those exact files** (byte-identical, md5-verified). Portainer's data survived: admin-check 204, InstanceID persisted, no project-prefixed volume created |
 | R-14 | Tier 1 archives hold secrets (`N8N_ENCRYPTION_KEY`, database credentials, Proxmox guest configs that may carry cloud-init passwords) on a laptop where **BitLocker is confirmed OFF** (2026-08-12: `Protection Off`, no key protectors, 931 GB decrypted). **Mitigated 2026-08-12** — archives are 7-Zip AES-256 with encrypted headers, and the backup script encrypts every run and deletes plaintext staging. Residual risk is the DPAPI-stored password and a brief staging window (§7.11) | Medium | **Mitigated 2026-08-12** |
+| R-15 | **Anticipated, not yet real.** The planned Ansible control node concentrates **lab-wide root access into a single SSH key**, held on the MSI Katana where BitLocker is off (R-14). A passphrase-less key on an unencrypted disk is equivalent to storing root credentials for every host in plaintext. Logged now so the controls are in place *before* the key is created, not after | Medium | **Anticipated 2026-08-14** — Ansible not yet deployed; mandatory controls defined in `IaC-MIGRATION.md` §3.2 |
+| R-16 | **Ollama API published on `0.0.0.0:11434` and `[::]:11434` with no authentication.** Verified 2026-08-14 from VM 102: TCP open, `GET /api/tags` returns **HTTP 200 in 1.5 ms** with the full model inventory, no credentials presented. Reachable from every host on the flat segment (§3.3) and from any Twingate client while the full-subnet grant stands (R-07). **The entire API is unauthenticated, not only reads** — `/api/pull` writes arbitrary models to a disk with 35 GB free, `/api/delete` removes them, `/api/generate` is unmetered inference on a 4-thread host. Same family as R-05 and fixed in the same place (§7.4), but materially worse: n8n at least authenticates. **Closed the same day** — the `ports:` mapping was removed after confirming the `ollamaApi` credential addresses the service by name | **High** | **Mitigated 2026-08-14** — refused from VM 102, still reachable from the n8n container; n8n and PostgreSQL never restarted |
 
 ---
 
@@ -331,8 +357,26 @@ Once **more than three services** sit behind the reverse proxy, its concentratio
 ### 7.3 Retire the internal CA in favour of an owned domain
 Would enable publicly-trusted Let's Encrypt certificates via DNS-01 and eliminate the trust-store distribution problem entirely. Deferred; `.internal` is the correct choice until then (§2.2).
 
-### 7.4 Host-level control for n8n `:5678`
-Bind the published port to the Docker bridge or restrict with `ufw` on VM 105. Cannot be solved at OPNsense (§3.2, R-05).
+### 7.4 Host-level control for published ports on VM 105
+
+Two services publish to `0.0.0.0` **and `[::]`** on the flat segment. Neither can be solved at OPNsense (§3.2) — both require a host-level control.
+
+| Port | Service | Authenticated | Risk | State |
+|---|---|---|---|---|
+| `5678` | n8n editor / API | ✅ yes | R-05 | **Open** |
+| `11434` | Ollama API | ❌ no | R-16 | ✅ **Closed 2026-08-14** |
+
+#### Ollama — done
+
+The `ports:` mapping was removed from `~/n8n-stack/docker-compose.yml` on 2026-08-14 after confirming the `ollamaApi` credential addresses the service as `http://ollama:11434` rather than by host IP. That check was the gate: one workflow references Ollama, so the mapping could not be assumed unused.
+
+Verified after `docker compose up -d ollama`: TCP refused and HTTP `000` from VM 102, `GET http://ollama:11434/api/tags` still returning the model inventory from inside the `n8n` container, the 2.7 GB model volume intact, and `n8n` / `n8n-postgres` uptime unbroken at 2 and 3 weeks. A backup of the pre-change file is at `~/n8n-stack/docker-compose.yml.bak-20260814` on VM 105.
+
+**Do not re-add a published port for Ollama.** Nothing outside the compose network needs to reach it.
+
+#### n8n `:5678` — still open
+
+**This one cannot simply be unpublished.** Caddy on VM 102 proxies to it across hosts (§4), so the port must remain reachable from `192.168.0.25`. Restrict it with `ufw` on VM 105 rather than unbinding it — allow `192.168.0.25`, deny the rest of the segment.
 
 ### 7.5 Vaultwarden self-host migration
 Move off Bitwarden cloud. **Prerequisite: R-01 must be resolved first** — self-hosting a password manager without working backups converts a cloud dependency into an unrecoverable one.
@@ -474,3 +518,9 @@ A second read-only pass on 2026-08-12 covered VM 105 (LVM, filesystem, Docker st
 | 2026-08-12 | **n8n restore verified end to end (§7.10)** — the off-host artifact was restored into an isolated stack and all five credentials decrypted (`export:credentials --decrypted` exit 0); production untouched. n8n becomes the first service with a demonstrated recovery path; quarterly re-verification set for 2026-11-12. **R-14 mitigated** — BitLocker confirmed off on the MSI Katana, so Tier 1 archives are encrypted instead: existing archive packed with 7-Zip AES-256 and encrypted headers (verified unlistable without the password), and `Backup-Tier1.ps1` rewritten to encrypt every run, verify the archive opens, delete plaintext staging, and refuse to run rather than fall back to plaintext. **§7.11** records the residual risks and the Vaultwarden circular-dependency warning. Google Gemini credential discovered and documented. |
 | 2026-08-12 | **Tier 1 backup implemented (§7.10)** — `scripts/Backup-Tier1.ps1` replicates 0.42 MB of configuration and the n8n database off-host to the MSI Katana laptop, scheduled daily, with dump validation and a per-run manifest. **R-01 downgraded to partially resolved.** CT 103 verified as `twingate-connector` via `pct list`. **R-13 added** — `DVWA` and `portainer` have no compose file and exist only as daemon state. **R-14 added** — backup archive holds plaintext secrets on a laptop of unverified encryption status. `SERVICE-TEMPLATE.md` adopted; `n8n-ai-agents/` converted as the reference implementation with a sanitized `docker-compose.example.yml` and `.env.example`. |
 | 2026-08-12 | **R-04 resolved** — VM 105 logical volume extended 31 → 62 GB online (`lvextend -l +100%FREE` / `resize2fs`), no downtime, no container restarts. **R-01 corrected:** a valid 405 KB `pg_dump` exists on VM 105; the 0-byte file is a separate failed attempt on VM 102. Verified PostgreSQL at 15 MB (execution history is not a growth risk) and 0 B Docker-reclaimable. All four n8n workflows confirmed `active = false` by design. Ollama retention confirmed as deliberate (§4.1). |
+| 2026-08-14 | **`IaC-MIGRATION.md` created** — Ansible-first tooling decision with Terraform deferred to a greenfield target (importing six existing guests with no Tier 2 backup was judged the highest-consequence action available); MSI Katana + WSL as control node; conversion ordered by blast radius; and a **rebuild**-based definition of done distinct from the **restore** test n8n already passed. Scope boundary set: Wazuh, OPNsense, the Proxmox host, and Metasploitable2 are **deliberately excluded** from IaC in favour of tested restore procedures. **R-09 re-severitied Medium → High** and made a Phase-0 prerequisite — `:latest` means *no* service currently satisfies the §7.10 rebuild test, n8n included, so the reference implementation's compose example is now pinned to 2.31.4 with the host unchanged. **R-15 added (anticipated)** — the planned Ansible key concentrates lab-wide root access on a laptop without full-disk encryption; logged before the key exists so the controls precede it. **Backup schedule corrected** — `DisallowStartIfOnBatteries` and `StopIfGoingOnBatteries` disabled after the 09:00 run was skipped; sleep/wake logs show the laptop was asleep through 09:00 on both 08-13 and 08-14, so §7.10's "scheduled daily" depended on `StartWhenAvailable` catch-up. Today's run re-executed manually and verified (encrypted, staging clean). |
+| 2026-08-14 | **R-09 groundwork — every running image version recorded** (§4, read-only `docker inspect` across VM 102 and VM 105). n8n confirmed still **2.31.4** with no drift since 2026-08-12. Two findings: **PostgreSQL is 15.18**, which is restore-relevant because the Tier 1 dump's `\restrict` markers require psql ≥ 15.18 — `postgres:15` floats forward and so will not regress on its own, but it does not record the known-good dump/server pairing, which is what a rebuild needs; and **Ollama's `image.version` label reads `24.04`, which is the Ubuntu base version, not the Ollama version** (actually 0.24.0) — pinning from that label would have recorded the wrong thing entirely. `portainer` and `DVWA` publish no version label at all, so digest is their only pinning option. n8n's compose example now pins all three services **by digest**. **R-09 remains open** — production still runs floating tags, nothing on any host was changed, and closing it additionally requires the update cadence at `IaC-MIGRATION.md` §4.4. |
+| 2026-08-14 | **R-16 identified — Ollama API exposed unauthenticated to the whole segment.** Verified from VM 102: `GET http://192.168.0.28:11434/api/tags` returns HTTP 200 in 1.5 ms with the full model inventory and no credentials, on `0.0.0.0:11434` **and** `[::]:11434`. The entire API is open, including `/api/pull`, `/api/delete` and `/api/generate` — not only reads. **This corrects an error in `docker-compose.example.yml`**, which omitted the `ollama` `ports:` block entirely and so understated the attack surface of the reference implementation; the block is now present and annotated. §7.4 retitled from "n8n `:5678`" to cover both published ports on VM 105, with a removal procedure gated on first checking the base URL in the encrypted `ollamaApi` credential — **one workflow references Ollama**, so the mapping cannot be assumed unused. §4's VM 105 table now distinguishes published from compose-network-only ports, which it previously conflated. |
+| 2026-08-14 | **R-16 mitigated the same day it was found.** Maintainer confirmed the `ollamaApi` credential reads `http://ollama:11434`, so the published mapping was unused; `ports:` removed from `~/n8n-stack/docker-compose.yml` (backup kept at `docker-compose.yml.bak-20260814`), YAML validated, and only the `ollama` container recreated. **Verified both directions** — TCP refused and HTTP `000` from VM 102, model inventory still served to the `n8n` container over the compose network, 2.7 GB model volume intact, and `n8n` / `n8n-postgres` uptime unbroken at 2 and 3 weeks. The compose example was updated a second time: it had just been corrected to *document* the exposure, and now records its removal instead, with an explicit instruction not to re-add the mapping. §7.4 split into a closed Ollama subsection and an open n8n `:5678` subsection — the latter cannot be unpublished because Caddy proxies to it from VM 102, so it needs `ufw` scoped to `192.168.0.25` instead. |
+| 2026-08-14 | **R-13 partially resolved** — `DVWA` and `portainer` reconstructed from `docker inspect` into `docker/dvwa.example.yml` and `docker/portainer.example.yml`, both **pinned by digest** since neither image publishes a version label. Verified with `git check-ignore -v` that `!**/*.example.yml` rescues both, rather than assuming it. **Neither has been deployed from its file, so R-13 is not closed** — an unexecuted reconstruction is a hypothesis (`IaC-MIGRATION.md` §4.3). Two findings recorded: **Portainer bind-mounts `/var/run/docker.sock` read-write**, making its credentials root-equivalent on VM 102 and putting Caddy's internal CA key within reach of whoever holds them — R-06 updated from an abstract "concentrates" to this concrete mechanism; and **DVWA has no volumes**, so adopting compose there is risk-free while Portainer's `portainer_data` requires `external: true` or Compose starts it empty. |
+| 2026-08-14 | **R-13 resolved — both reconstructions proven by deployment.** The repo files were copied to VM 102, md5-verified byte-identical, and used to recreate both containers, so what runs is what is committed. DVWA first (no volumes, nothing to lose), then Portainer. **Portainer's data survived**: only `portainer_data` exists afterwards, `GET /api/users/admin/check` returned 204 and the InstanceID persisted. Note for future verification — `portainer.db`'s checksum **does** change across a restart (BoltDB rewrites its meta page on open), so a file hash is the wrong retention test; the admin-check endpoint is the right one. Two corrections to earlier claims: **Portainer's version is 2.39.1**, readable from `/api/status` even though the image carries no version label, so "no label" does not imply "undiscoverable"; and **compose moved DVWA onto its own network**, which blocks direct container-to-container access to Portainer but **is not containment** — the published-port path remains open from `172.17.0.1:9443` and `192.168.0.25:9443`, both confirmed. Caddy, Jellyfin and secplus-drill were untouched throughout. |

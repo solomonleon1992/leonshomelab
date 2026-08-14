@@ -39,8 +39,13 @@
     .\Backup-Tier1.ps1                   # normal run (unattended)
 
 .NOTES
-    Requires SSH aliases: proxmox, vm102, n8n. Requires 7-Zip installed.
-    Pi-hole, Wazuh and OPNsense are NOT covered - no SSH key access.
+    Requires 7-Zip and SSH aliases: proxmox, vm102, n8n, pihole, opnsense.
+
+    Wazuh is deliberately NOT covered. SSH key access works, but every Wazuh
+    config path - /var/ossec/etc/*, the indexer and dashboard configs - is
+    root-only, and the backup account has no passwordless sudo. Verified
+    2026-08-14. Closing that gap is a privilege decision (ARCHITECTURE.md
+    7.6), not something this script should quietly work around.
 #>
 
 [CmdletBinding()]
@@ -103,7 +108,7 @@ $results  = New-Object System.Collections.ArrayList
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 New-Item -ItemType Directory -Force -Path $stageDir    | Out-Null
-foreach ($sub in 'vm105-n8n', 'vm102-docker', 'proxmox') {
+foreach ($sub in 'vm105-n8n', 'vm102-docker', 'proxmox', 'pihole', 'opnsense') {
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDir $sub) | Out-Null
 }
 
@@ -201,6 +206,62 @@ Save-RemoteOutput 'proxmox' 'echo "=== qm list ==="; qm list; echo; echo "=== pc
 Save-RemoteOutput 'proxmox' 'cat /etc/network/interfaces' (Join-Path $pveDir 'network-interfaces.txt') 'Proxmox network config'
 
 # ---------------------------------------------------------------------------
+# Pi-hole - DNS configuration
+#
+# pihole.toml holds the local DNS A records and CNAMEs that the .internal
+# migration depends on (ARCHITECTURE.md 7.8). The Pi is the one lab host with
+# no dependency on /dev/sda, but a microSD card is its own failure mode (R-08),
+# so this is captured regardless.
+# ---------------------------------------------------------------------------
+Write-Host "[Pi-hole] DNS configuration..." -ForegroundColor Yellow
+$piDir = Join-Path $stageDir 'pihole'
+
+Get-RemoteFile 'pihole' '/etc/pihole/pihole.toml'  (Join-Path $piDir 'pihole.toml')  'Pi-hole config (pihole.toml)'
+Get-RemoteFile 'pihole' '/etc/pihole/dnsmasq.conf' (Join-Path $piDir 'dnsmasq.conf') 'Pi-hole dnsmasq.conf'
+Save-RemoteOutput 'pihole' 'pihole -v; echo; ls -la /etc/pihole/' (Join-Path $piDir 'pihole-state.txt') 'Pi-hole version/state'
+
+# NOT captured: gravity.db (63 MB, overwhelmingly downloaded blocklist content
+# that `pihole -g` regenerates). The adlist URLs inside it are genuinely not
+# regenerable, but extracting them needs sqlite3 - absent on the Pi - and
+# `pihole-FTL --teleporter` needs sudo to read pihole-FTL.db. Recorded in the
+# manifest as a gap rather than silently dropped.
+
+# ---------------------------------------------------------------------------
+# OPNsense - entire configuration
+#
+# /conf/config.xml IS the firewall: interfaces, rules, users, NAT, and the WAN
+# pass rules that make management reachable at all (ARCHITECTURE.md 3.4).
+# Nothing else on that box needs capturing.
+#
+# Connects as root, whose login shell is tcsh. scp is unaffected, but any
+# `ssh` command must be wrapped in /bin/sh -c - Bourne syntax sent directly
+# fails with "Illegal variable name".
+# ---------------------------------------------------------------------------
+Write-Host "[OPNsense] firewall configuration..." -ForegroundColor Yellow
+$opnDir  = Join-Path $stageDir 'opnsense'
+$opnFile = Join-Path $opnDir 'config.xml'
+
+Get-RemoteFile 'opnsense' '/conf/config.xml' $opnFile 'OPNsense config.xml'
+Save-RemoteOutput 'opnsense' '/bin/sh -c "opnsense-version; echo; ifconfig -a"' (Join-Path $opnDir 'opnsense-state.txt') 'OPNsense version/interfaces'
+
+# A truncated config.xml is as useless as a 0-byte database dump and just as
+# invisible in `ls` - the same failure the n8n dump validation above exists to
+# catch. Parsing it is the cheapest proof it is whole.
+if (Test-Path $opnFile) {
+    $opnLen = (Get-Item $opnFile).Length
+    if ($opnLen -lt 4096) {
+        Add-Result 'OPNsense config validation' 'FAIL' "only $opnLen bytes - truncated"
+    } else {
+        try {
+            $null = [xml](Get-Content $opnFile -Raw)
+            Add-Result 'OPNsense config validation' 'OK' "$opnLen bytes, parses as XML"
+        } catch {
+            Add-Result 'OPNsense config validation' 'FAIL' 'does not parse as XML - truncated or corrupt'
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Manifest
 # ---------------------------------------------------------------------------
 $stagedBytes = (Get-ChildItem $stageDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
@@ -224,9 +285,16 @@ CONTENTS
 $($results | Format-Table -AutoSize | Out-String)
 
 GAPS - not covered by this run
-  - Pi-hole (192.168.0.50)      no SSH key access
-  - Wazuh (192.168.0.27)        no SSH key access
-  - OPNsense (192.168.0.22)     no SSH key access; console-only administration
+  - Wazuh (192.168.0.27)        SSH key access WORKS, but /var/ossec/etc/*
+                                and the indexer/dashboard configs are all
+                                root-only and this account has no
+                                passwordless sudo. Verified 2026-08-14.
+                                Pending a privilege decision - see
+                                ARCHITECTURE.md 7.6.
+  - Pi-hole adlist URLs         live in gravity.db (63 MB). Not extracted:
+                                sqlite3 is absent on the Pi and the native
+                                teleporter export needs sudo. The rest of
+                                the Pi-hole configuration IS captured.
   - Full VM images (Tier 2)     ~127 GB, requires storage hardware
 
 RESTORE
@@ -235,6 +303,12 @@ RESTORE
             sufficient. Verified working 2026-08-12.
   Proxmox:  guest configs are reference material, not bootable images.
             They rebuild the definition, not the disk contents.
+  OPNsense: config.xml rebuilds the ENTIRE firewall. Restore via
+            System > Configuration > Backups > Restore, or copy to
+            /conf/config.xml and reboot. Note the WAN/LAN inversion
+            documented in ARCHITECTURE.md 3.4 before editing rules.
+  Pi-hole:  pihole.toml and dnsmasq.conf drop back into /etc/pihole/,
+            then restart pihole-FTL. Adlists must be re-added by hand.
 "@
 $manifest | Out-File -FilePath (Join-Path $stageDir 'MANIFEST.txt') -Encoding utf8
 

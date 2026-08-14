@@ -229,12 +229,14 @@ Reconsider Terraform for existing guests only once Tier 2 backups exist (R-01 fu
 
 | Excluded | Reason | What is required instead |
 |---|---|---|
-| **Wazuh (VM 104)** | Deployed via the official all-in-one installer, which assumes ownership of the host (`ARCHITECTURE.md` §4.1). Automating it means reverse-engineering a vendor installer for a single-instance service | Config + agent roster in Tier 1; a written, **tested** restore procedure |
+| **Wazuh (VM 104)** | Deployed via the official all-in-one installer, which assumes ownership of the host (`ARCHITECTURE.md` §4.1). Automating it means reverse-engineering a vendor installer for a single-instance service | ✅ **Config + agent roster in Tier 1 since 2026-08-14** (`ossec.conf` + `client.keys`, via an argument-pinned sudoers rule). Restore procedure written, **not yet executed** |
 | **OPNsense (VM 100)** | Configuration is a single XML blob with a native backup/restore path, and the platform **actively overwrites** files managed out-of-band: `authorized_keys` is regenerated from `config.xml` on every GUI apply, so `ansible.posix.authorized_key` succeeds and is then silently reverted (§4.1). Ansible does not merely add nothing here — it fights the platform and fails quietly | Export `config.xml` into Tier 1; test the import path. Manage users and keys in the GUI |
 | **Proxmox host itself** | Bare-metal hypervisor install. Automating it requires PXE/Packer infrastructure that does not exist and cannot pay for itself at one host | Documented install + guest configs in Tier 1 |
 | **Metasploitable2 (VM 101)** | Distributed as a fixed appliance image. Its value is being unpatched | Note the source image and checksum |
 
 For every row above, the recovery bar is **a restore procedure that has been executed and dated** — the same standard as an IaC rebuild, met by a different mechanism.
+
+**Wazuh now meets the data half of that bar and not the tested half.** Capturing `client.keys` is what makes restore-without-re-enrollment possible, which is the whole reason this table lets Wazuh out of IaC in the first place — but the procedure has been written, not run. By this document's own standard (§9.1, criterion 5) that makes it a hypothesis. The archive carries live agent credentials as the price of that capability; the trade is recorded at `scripts/README.md` §2.
 
 ---
 

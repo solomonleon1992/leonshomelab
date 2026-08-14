@@ -1,0 +1,131 @@
+# Backup Scripts
+
+**Status:** Operational · **Last verified:** 2026-08-14
+
+`Backup-Tier1.ps1` is the only thing that puts any of this lab on hardware other than the single 4 TB disk every VM lives on. See `ARCHITECTURE.md` §7.10 for the two-tier strategy and R-01 for why it exists.
+
+---
+
+## 1. What It Does
+
+Pulls the small, irreplaceable set of configuration and data off-host to the MSI Katana laptop, packs it into a **7-Zip AES-256 archive with encrypted headers**, verifies the archive opens, and only then deletes the plaintext staging directory.
+
+| | |
+|---|---|
+| Coverage | **All six lab hosts** |
+| Size | ~0.57 MB staged → ~104 KB encrypted |
+| Schedule | Daily 09:00, Windows Task Scheduler → *Homelab Tier1 Backup* |
+| Retention | 14 runs |
+| Destination | `%USERPROFILE%\homelab-backups` — refuses to run if this is inside the git repo |
+
+**It fails closed.** Missing 7-Zip or a missing password file causes a non-zero exit and **no backup at all**, rather than a fallback to plaintext. A recurring job needs its security control inside the job, not applied afterwards by hand.
+
+---
+
+## 2. ⚠️ The Archive Contains Live Credentials
+
+This is not a "config backup" in the harmless sense. Every archive holds:
+
+| Secret | Source | Why it is captured |
+|---|---|---|
+| `N8N_ENCRYPTION_KEY` | n8n compose file | Without it the n8n database is undecryptable — the dump alone restores nothing |
+| PostgreSQL credentials | n8n compose file | Inline in compose; unavoidable until secrets move to `.env` |
+| **Wazuh `client.keys`** | `/var/ossec/etc/` | **Agent authentication material.** Anyone holding it can impersonate an agent to the manager |
+| OPNsense `config.xml` | `/conf/` | The complete firewall, including user password hashes |
+| Proxmox guest configs | `/etc/pve/` | May carry cloud-init passwords and SSH keys |
+
+### The `client.keys` trade, stated plainly
+
+Capturing agent authentication material is a **deliberate choice, not an oversight.**
+
+Without `client.keys`, a Wazuh restore means re-enrolling every agent by hand. With it, the manager comes back knowing its agents. That is the difference between a recovery procedure and a rebuild project — and it is exactly the bar `IaC-MIGRATION.md` §8 sets for Wazuh, which is excluded from IaC precisely *because* its recovery is expected to come from Tier 1.
+
+**The control is the encryption, not omission.** AES-256 with encrypted headers, and the password held in **Bitwarden — outside the lab's failure domain**.
+
+> **The archive password must never move to Vaultwarden.** Vaultwarden would run on the lab. If the lab is lost you need this archive to rebuild it, and its password would be locked inside the thing being rebuilt. See `ARCHITECTURE.md` §7.11.
+
+**Never commit an archive.** `.gitignore` blocks `*.7z`, and the script refuses to write into the repository, but neither is a substitute for knowing what is in the file.
+
+---
+
+## 3. Setup
+
+One time, before the scheduled task can succeed:
+
+```powershell
+.\Backup-Tier1.ps1 -SetPassword     # store the password in Bitwarden FIRST
+```
+
+Stored DPAPI-protected at `%USERPROFILE%\.homelab-backup.cred` — decryptable only by this Windows user on this machine. **If the Windows profile is lost, that file is unrecoverable**, which is why the master copy belongs in Bitwarden.
+
+Requires **7-Zip** and six SSH aliases: `proxmox`, `vm102`, `n8n`, `pihole`, `opnsense`, `wazuh`.
+
+---
+
+## 4. The Wazuh Sudoers Dependency
+
+Wazuh's config files are root-only. Access comes from an **argument-pinned** rule at `/etc/sudoers.d/wazuh-backup` on `192.168.0.27`:
+
+```
+leon ALL=(root) NOPASSWD: /usr/bin/cat /var/ossec/etc/ossec.conf, /usr/bin/cat /var/ossec/etc/client.keys
+```
+
+Verified 2026-08-14 with the credential cache cleared: both pinned reads succeed with no prompt; `/etc/shadow` is refused; and appending a second path to a pinned command is refused, confirming the pinning holds.
+
+The script uses **`sudo -n`** specifically so that if this rule is ever removed, an unattended run **fails loudly** instead of hanging forever on a password prompt.
+
+### ⚠️ Condition: custom rules and decoders are NOT covered
+
+`/var/ossec/etc/rules/local_rules.xml` and `/var/ossec/etc/decoders/local_decoder.xml` are stock and unmodified since the September 2025 install, so they are **deliberately excluded** from the pin list.
+
+**The moment you write a custom rule or decoder, extend the sudoers rule and the script.** Otherwise the backup will silently omit exactly the work you most want to keep, and nothing will report an error — the run will show all-OK while missing them.
+
+---
+
+## 5. Validation
+
+A backup that looks fine and is empty is worse than no backup: it stops you looking. A 0-byte `pg_dump` on VM 102 went unnoticed for ten days in August 2026 for exactly this reason. Each fragile artifact is therefore checked, not just fetched:
+
+| Artifact | Check |
+|---|---|
+| n8n `pg_dump` | Size floor **and** the `PostgreSQL database dump complete` trailer |
+| OPNsense `config.xml` | Size floor **and** an XML parse |
+| Wazuh `ossec.conf` | Size floor **and** a *wrapped* XML parse — see below |
+| Wazuh `client.keys` | Size floor, plus a count of agent entries |
+
+**Why `ossec.conf` is wrapped.** Wazuh permits **multiple root-level `<ossec_config>` blocks**, and this install has two. A strict XML parse fails on a perfectly healthy file, which would mark every nightly run as failed. Wrapping the content in a synthetic root validates element structure while tolerating the multiple roots — and it still rejects truncation, verified by chopping the tail off the real file.
+
+---
+
+## 6. Restore
+
+Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
+
+| Service | Notes |
+|---|---|
+| **n8n** | `n8n-ai-agents/README.md` §7. Requires `N8N_ENCRYPTION_KEY` from Bitwarden — the dump alone is **not** sufficient. Verified end to end 2026-08-12 |
+| **OPNsense** | `config.xml` rebuilds the entire firewall. Read `ARCHITECTURE.md` §3.4 first — the **WAN/LAN roles are inverted** on this box |
+| **Wazuh** | Reinstall via the all-in-one installer, restore `ossec.conf` and `client.keys` to `/var/ossec/etc/`, restart the manager. `client.keys` is what avoids re-enrolling agents |
+| **Pi-hole** | Files drop back into `/etc/pihole/`, restart `pihole-FTL`. Adlists must be re-added by hand |
+| **Proxmox** | Guest configs are **reference material, not bootable images** — they rebuild the definition, not the disk contents |
+
+**Only the n8n leg has actually been executed.** Everything else is a written procedure, which `SERVICE-TEMPLATE.md` correctly calls a hypothesis. Re-verify n8n quarterly — **next due 2026-11-12**.
+
+---
+
+## 7. Known Gaps
+
+- **Tier 2 (full VM images, ~127 GB)** — no storage hardware. `IaC-MIGRATION.md` argues this is what the IaC migration makes optional
+- **Pi-hole adlist URLs** — inside `gravity.db` (63 MB, mostly regenerable blocklist content). `sqlite3` is absent on the Pi and the native teleporter export needs sudo
+- **Wazuh custom rules/decoders** — see §4
+- **Wazuh indexer and dashboard configs** — root-only, not pinned. The manager config and agent roster *are* captured
+
+---
+
+## 8. Change Log
+
+| Date | Change |
+|---|---|
+| 2026-08-14 | **Wazuh added** via an argument-pinned sudoers rule — Tier 1 now covers all six hosts, 26/26 items. `client.keys` capture documented as a deliberate trade (§2). Wrapped-XML validation adopted after a strict parse was found to fail on healthy multi-root `ossec.conf`. This README created. |
+| 2026-08-14 | **OPNsense and Pi-hole added** (three hosts → five). `config.xml` XML-parse validated. Scheduled task's battery restrictions removed after runs were silently skipped. |
+| 2026-08-12 | Script created; encryption made unconditional and fail-closed after a manual 7-Zip step would have been silently reverted by the next scheduled run. |

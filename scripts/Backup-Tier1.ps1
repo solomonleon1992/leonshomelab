@@ -39,13 +39,19 @@
     .\Backup-Tier1.ps1                   # normal run (unattended)
 
 .NOTES
-    Requires 7-Zip and SSH aliases: proxmox, vm102, n8n, pihole, opnsense.
+    Requires 7-Zip and SSH aliases: proxmox, vm102, n8n, pihole, opnsense,
+    wazuh. All six lab hosts are covered.
 
-    Wazuh is deliberately NOT covered. SSH key access works, but every Wazuh
-    config path - /var/ossec/etc/*, the indexer and dashboard configs - is
-    root-only, and the backup account has no passwordless sudo. Verified
-    2026-08-14. Closing that gap is a privilege decision (ARCHITECTURE.md
-    7.6), not something this script should quietly work around.
+    Wazuh additionally depends on a narrowly scoped, argument-pinned sudoers
+    rule at /etc/sudoers.d/wazuh-backup (see the Wazuh section below). If that
+    rule is removed, the Wazuh items fail loudly - `sudo -n` never prompts.
+
+    THIS ARCHIVE CARRIES AGENT AUTHENTICATION MATERIAL (Wazuh client.keys)
+    as well as N8N_ENCRYPTION_KEY, database credentials, and the full
+    OPNsense configuration. That is the intended trade - it is what makes
+    restore without re-enrollment possible - and AES-256 with the password
+    held in Bitwarden, outside the lab's failure domain, is the control.
+    See scripts/README.md.
 #>
 
 [CmdletBinding()]
@@ -108,7 +114,7 @@ $results  = New-Object System.Collections.ArrayList
 
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 New-Item -ItemType Directory -Force -Path $stageDir    | Out-Null
-foreach ($sub in 'vm105-n8n', 'vm102-docker', 'proxmox', 'pihole', 'opnsense') {
+foreach ($sub in 'vm105-n8n', 'vm102-docker', 'proxmox', 'pihole', 'opnsense', 'wazuh') {
     New-Item -ItemType Directory -Force -Path (Join-Path $stageDir $sub) | Out-Null
 }
 
@@ -262,6 +268,88 @@ if (Test-Path $opnFile) {
 }
 
 # ---------------------------------------------------------------------------
+# Wazuh - SIEM configuration and agent roster
+#
+# Both files are root-only. Access comes from a narrowly scoped sudoers rule
+# at /etc/sudoers.d/wazuh-backup on 192.168.0.27, added 2026-08-14:
+#
+#   leon ALL=(root) NOPASSWD: /usr/bin/cat /var/ossec/etc/ossec.conf,
+#                             /usr/bin/cat /var/ossec/etc/client.keys
+#
+# The rule is ARGUMENT-PINNED. Verified 2026-08-14 that `sudo -n cat` on an
+# unpinned path is refused, and that appending a second path to a pinned
+# command is also refused.
+#
+# `sudo -n` is deliberate: if that rule is ever removed, an unattended run
+# fails loudly instead of hanging forever on a password prompt.
+#
+# *** SCOPE CONDITION - READ BEFORE WRITING CUSTOM WAZUH RULES ***
+# The pin list covers exactly two files. /var/ossec/etc/rules/local_rules.xml
+# and /var/ossec/etc/decoders/local_decoder.xml are stock and unmodified since
+# the September 2025 install, so they are excluded ON PURPOSE. The moment
+# custom rules or decoders are written, the sudoers rule must be extended and
+# this section updated - otherwise the backup silently omits them and nothing
+# here will complain.
+#
+# client.keys holds AGENT AUTHENTICATION MATERIAL. Capturing it is what makes
+# restore-without-re-enrollment possible. See scripts/README.md.
+# ---------------------------------------------------------------------------
+Write-Host "[Wazuh] SIEM configuration..." -ForegroundColor Yellow
+$wzDir = Join-Path $stageDir 'wazuh'
+
+# Read via sudo into a temp file, then scp. This preserves the file bytes
+# exactly, where piping ssh stdout through PowerShell would re-encode it
+# (BOM + CRLF). The redirect runs as the SSH user, so it sits outside the
+# sudo pin and is allowed. `umask 077` keeps the transient copy private.
+foreach ($wf in @(
+    @{ Remote = '/var/ossec/etc/ossec.conf';  Local = 'ossec.conf';  Label = 'Wazuh ossec.conf' },
+    @{ Remote = '/var/ossec/etc/client.keys'; Local = 'client.keys'; Label = 'Wazuh client.keys (agent roster)' }
+)) {
+    $wzTmp = "/tmp/wz-$stamp-$($wf.Local)"
+    & ssh -o BatchMode=yes -o ConnectTimeout=10 wazuh "(umask 077; sudo -n cat $($wf.Remote) > $wzTmp)"
+    if ($LASTEXITCODE -eq 0) {
+        Get-RemoteFile 'wazuh' $wzTmp (Join-Path $wzDir $wf.Local) $wf.Label
+        & ssh -o BatchMode=yes -o ConnectTimeout=10 wazuh "rm -f $wzTmp" | Out-Null
+    } else {
+        Add-Result $wf.Label 'FAIL' "sudo -n refused (exit $LASTEXITCODE) - is /etc/sudoers.d/wazuh-backup still present?"
+    }
+}
+
+# ossec.conf is validated by a WRAPPED parse, not a plain one.
+#
+# Wazuh permits MULTIPLE root-level <ossec_config> blocks - this install has
+# two - which is not well-formed XML. A strict [xml] cast fails on a perfectly
+# healthy file, which would mark every nightly run as failed. Wrapping in a
+# synthetic root validates element structure and still rejects truncation;
+# verified 2026-08-14 that chopping the tail off the real file is caught.
+$wzConf = Join-Path $wzDir 'ossec.conf'
+if (Test-Path $wzConf) {
+    $wzLen = (Get-Item $wzConf).Length
+    if ($wzLen -lt 1024) {
+        Add-Result 'Wazuh ossec.conf validation' 'FAIL' "only $wzLen bytes - truncated"
+    } else {
+        try {
+            $null = [xml]("<validation-root>" + (Get-Content $wzConf -Raw) + "</validation-root>")
+            Add-Result 'Wazuh ossec.conf validation' 'OK' "$wzLen bytes, XML structure valid"
+        } catch {
+            Add-Result 'Wazuh ossec.conf validation' 'FAIL' 'malformed XML - truncated or corrupt'
+        }
+    }
+}
+
+# client.keys is one agent per line: id name ip key
+$wzKeys = Join-Path $wzDir 'client.keys'
+if (Test-Path $wzKeys) {
+    $wzkLen = (Get-Item $wzKeys).Length
+    if ($wzkLen -lt 16) {
+        Add-Result 'Wazuh client.keys validation' 'FAIL' "only $wzkLen bytes - empty or truncated"
+    } else {
+        $agentCount = @(Get-Content $wzKeys | Where-Object { $_.Trim() -ne '' }).Count
+        Add-Result 'Wazuh client.keys validation' 'OK' "$wzkLen bytes, $agentCount agent entries"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Manifest
 # ---------------------------------------------------------------------------
 $stagedBytes = (Get-ChildItem $stageDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
@@ -279,18 +367,25 @@ Result:   $okCount OK, $failCount FAILED
 *** THIS ARCHIVE CONTAINS REAL SECRETS ***
 Compose files carry N8N_ENCRYPTION_KEY and database credentials inline.
 Proxmox guest configs may carry cloud-init passwords and SSH keys.
+OPNsense config.xml is the complete firewall, including user hashes.
+Wazuh client.keys is AGENT AUTHENTICATION MATERIAL - anyone holding it can
+impersonate a Wazuh agent to the manager. Capturing it is deliberate: it is
+what makes restore without re-enrolling every agent possible.
 Encrypted with 7-Zip AES-256 and encrypted headers. Never commit it.
 
 CONTENTS
 $($results | Format-Table -AutoSize | Out-String)
 
 GAPS - not covered by this run
-  - Wazuh (192.168.0.27)        SSH key access WORKS, but /var/ossec/etc/*
-                                and the indexer/dashboard configs are all
-                                root-only and this account has no
-                                passwordless sudo. Verified 2026-08-14.
-                                Pending a privilege decision - see
-                                ARCHITECTURE.md 7.6.
+  - Wazuh custom rules          /var/ossec/etc/rules/local_rules.xml and
+    and decoders                decoders/local_decoder.xml are NOT in the
+                                sudoers pin list. They are stock and
+                                unmodified, so this is deliberate. IF YOU
+                                EVER WRITE CUSTOM RULES OR DECODERS, extend
+                                /etc/sudoers.d/wazuh-backup and this script
+                                or they will be silently omitted.
+  - Wazuh indexer/dashboard     configs are root-only and not pinned. The
+                                manager config and agent roster ARE captured.
   - Pi-hole adlist URLs         live in gravity.db (63 MB). Not extracted:
                                 sqlite3 is absent on the Pi and the native
                                 teleporter export needs sudo. The rest of
@@ -309,6 +404,11 @@ RESTORE
             documented in ARCHITECTURE.md 3.4 before editing rules.
   Pi-hole:  pihole.toml and dnsmasq.conf drop back into /etc/pihole/,
             then restart pihole-FTL. Adlists must be re-added by hand.
+  Wazuh:    reinstall via the official all-in-one installer, then restore
+            ossec.conf and client.keys to /var/ossec/etc/ (root:wazuh,
+            client.keys 0640) and restart wazuh-manager. Restoring
+            client.keys is what avoids re-enrolling every agent - without
+            it, each agent must be registered again by hand.
 "@
 $manifest | Out-File -FilePath (Join-Path $stageDir 'MANIFEST.txt') -Encoding utf8
 

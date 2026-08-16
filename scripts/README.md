@@ -13,7 +13,7 @@ Pulls the small, irreplaceable set of configuration and data off-host to the MSI
 | | |
 |---|---|
 | Coverage | **All six lab hosts** |
-| Size | ~0.57 MB staged → ~104 KB encrypted |
+| Size | ~4.3 MB staged → ~670 KB encrypted |
 | Schedule | Daily 09:00, Windows Task Scheduler → *Homelab Tier1 Backup* |
 | Retention | 14 runs |
 | Destination | `%USERPROFILE%\homelab-backups` — refuses to run if this is inside the git repo |
@@ -103,7 +103,8 @@ Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
 
 | Service | Notes |
 |---|---|
-| **n8n** | `n8n-ai-agents/README.md` §7. Requires `N8N_ENCRYPTION_KEY` from Bitwarden — the dump alone is **not** sufficient. Verified end to end 2026-08-12 |
+| **n8n** | `n8n-ai-agents/README.md` §7. Requires `N8N_ENCRYPTION_KEY` from Bitwarden — the dump alone is **not** sufficient. Verified end to end 2026-08-12. The restored instance starts with an **empty execution history**, by design |
+| **job-finder** | Restore `jobtracker-*.sql` into a `jobtracker` database on the same PostgreSQL instance, then unpack `job-finder-source.tar.gz` to `~/n8n-stack/job-finder/` and redeploy via its `deploy.sh`. **The workflows inside n8n are build output** — that directory is the source they are generated from, and it exists nowhere else |
 | **OPNsense** | `config.xml` rebuilds the entire firewall. Read `ARCHITECTURE.md` §3.4 first — the **WAN/LAN roles are inverted** on this box |
 | **Wazuh** | Reinstall via the all-in-one installer, restore `ossec.conf` and `client.keys` to `/var/ossec/etc/`, restart the manager. `client.keys` is what avoids re-enrolling agents |
 | **Pi-hole** | Files drop back into `/etc/pihole/`, restart `pihole-FTL`. Adlists must be re-added by hand |
@@ -115,6 +116,7 @@ Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
 
 ## 7. Known Gaps
 
+- **n8n execution history** — deliberately excluded. Schema is kept, rows are not. The 60-second Telegram poll in `job-finder-approval` produces ~1,200 executions/day, which made execution data **97% of a 39 MB dump**. A restore needs workflows, credentials and settings, not a log of past runs. **This is excluded from the backup but not bounded on the host** — no `EXECUTIONS_DATA_PRUNE` variables are set, so the live database keeps growing. Note: do **not** reach for `saveDataSuccessExecution: 'none'` to solve this; it leaves zombie `running` executions accumulating instead
 - **Tier 2 (full VM images, ~127 GB)** — no storage hardware. `IaC-MIGRATION.md` argues this is what the IaC migration makes optional
 - **Pi-hole adlist URLs** — inside `gravity.db` (63 MB, mostly regenerable blocklist content). `sqlite3` is absent on the Pi and the native teleporter export needs sudo
 - **Wazuh custom rules/decoders** — see §4
@@ -126,6 +128,7 @@ Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
 
 | Date | Change |
 |---|---|
+| 2026-08-16 | **`jobtracker` database and the `job-finder/` source tree added; n8n execution history excluded.** The job-finder agents keep their state in a separate database that `pg_dump n8n` never touched — 359 job matches were unbacked-up from creation. At the same time the 60-second Telegram poll had driven the n8n dump to 39 MB, 97% of it execution history. Both fixed together: **29 items, 860 KB → 670 KB, carrying 3.3 MB more real content**. Restore has not been re-verified against the new dump format — folded into the 2026-11-12 quarterly check. |
 | 2026-08-14 | **Wazuh added** via an argument-pinned sudoers rule — Tier 1 now covers all six hosts, 26/26 items. `client.keys` capture documented as a deliberate trade (§2). Wrapped-XML validation adopted after a strict parse was found to fail on healthy multi-root `ossec.conf`. This README created. |
 | 2026-08-14 | **OPNsense and Pi-hole added** (three hosts → five). `config.xml` XML-parse validated. Scheduled task's battery restrictions removed after runs were silently skipped. |
 | 2026-08-12 | Script created; encryption made unconditional and fail-closed after a manual 7-Zip step would have been silently reverted by the next scheduled run. |

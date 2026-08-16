@@ -152,8 +152,19 @@ Write-Host "`n=== Tier 1 backup (staging -> $stageDir) ===`n" -ForegroundColor C
 Write-Host "[VM 105] n8n stack..." -ForegroundColor Yellow
 $n8nDir = Join-Path $stageDir 'vm105-n8n'
 
+# Execution HISTORY is excluded, execution SCHEMA is not.
+#
+# job-finder-approval polls Telegram on a 60s schedule, which produced ~1,200
+# executions/day and pushed this dump from 406 KB to 39 MB in two days - 97%
+# of it execution_data. That is operational noise: a restore needs workflows,
+# credentials and settings, not a log of past runs. Measured 2026-08-16:
+# 39.1 MB full vs 928 KB with these exclusions.
+#
+# --exclude-table-data keeps the CREATE TABLE and drops only the rows, so a
+# restored instance comes up with an empty execution history and works.
 $dumpRemote = "/tmp/n8n-backup-$stamp.sql"
-& ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "docker exec n8n-postgres pg_dump -U n8n n8n > $dumpRemote"
+$pgExclude  = '--exclude-table-data=execution_data --exclude-table-data=execution_entity --exclude-table-data=execution_metadata --exclude-table-data=execution_annotations'
+& ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "docker exec n8n-postgres pg_dump -U n8n n8n $pgExclude > $dumpRemote"
 if ($LASTEXITCODE -eq 0) {
     $dumpLocal = Join-Path $n8nDir "n8n-database-$stamp.sql"
     Get-RemoteFile 'n8n' $dumpRemote $dumpLocal 'n8n PostgreSQL dump'
@@ -174,6 +185,56 @@ if ($LASTEXITCODE -eq 0) {
     & ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "rm -f $dumpRemote" | Out-Null
 } else {
     Add-Result 'n8n PostgreSQL dump' 'FAIL' "pg_dump failed (ssh exit $LASTEXITCODE)"
+}
+
+# ---------------------------------------------------------------------------
+# jobtracker database - the job-finder's actual application state
+#
+# The job-finder agents (added 2026-08-15/16) keep their state in a SEPARATE
+# `jobtracker` database on the same PostgreSQL instance: job_matches, bot_state.
+# Keeping it out of n8n's schema is good design, but it means `pg_dump n8n`
+# does NOT include it - it went unbacked-up from creation until 2026-08-16.
+#
+# Execution history is excluded above because it is noise. This is the
+# opposite: it is the irreplaceable output of the system.
+# ---------------------------------------------------------------------------
+$jtRemote = "/tmp/jobtracker-$stamp.sql"
+& ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "docker exec n8n-postgres pg_dump -U n8n jobtracker > $jtRemote"
+if ($LASTEXITCODE -eq 0) {
+    $jtLocal = Join-Path $n8nDir "jobtracker-$stamp.sql"
+    Get-RemoteFile 'n8n' $jtRemote $jtLocal 'jobtracker PostgreSQL dump'
+    if (Test-Path $jtLocal) {
+        $jtLen  = (Get-Item $jtLocal).Length
+        $jtTail = Get-Content $jtLocal -Tail 5 | Out-String
+        if ($jtLen -lt 1024) {
+            Add-Result 'jobtracker dump validation' 'FAIL' "only $jtLen bytes - empty or truncated"
+        } elseif ($jtTail -notmatch 'PostgreSQL database dump complete') {
+            Add-Result 'jobtracker dump validation' 'FAIL' 'missing completion marker - truncated'
+        } else {
+            Add-Result 'jobtracker dump validation' 'OK' "$jtLen bytes, completion marker present"
+        }
+    }
+    & ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "rm -f $jtRemote" | Out-Null
+} else {
+    Add-Result 'jobtracker PostgreSQL dump' 'FAIL' "pg_dump failed (ssh exit $LASTEXITCODE)"
+}
+
+# ---------------------------------------------------------------------------
+# job-finder source of truth
+#
+# ~/n8n-stack/job-finder/ holds build.js, codenodes.js, deploy.sh, the workflow
+# JSON, the scoring system prompt and the cover-letter template. The workflows
+# in n8n's database are BUILD OUTPUT; this directory is the source they are
+# generated from, and it exists nowhere else - not in git, not in the n8n DB.
+# 216 KB, 13 files.
+# ---------------------------------------------------------------------------
+$jfRemote = "/tmp/job-finder-$stamp.tar.gz"
+& ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "tar czf $jfRemote -C ~/n8n-stack job-finder"
+if ($LASTEXITCODE -eq 0) {
+    Get-RemoteFile 'n8n' $jfRemote (Join-Path $n8nDir 'job-finder-source.tar.gz') 'job-finder source (build.js, deploy.sh, workflow JSON)'
+    & ssh -o BatchMode=yes -o ConnectTimeout=10 n8n "rm -f $jfRemote" | Out-Null
+} else {
+    Add-Result 'job-finder source' 'FAIL' "tar failed (ssh exit $LASTEXITCODE)"
 }
 
 Get-RemoteFile 'n8n' '~/n8n-stack/docker-compose.yml' (Join-Path $n8nDir 'docker-compose.yml') 'n8n compose file'
@@ -386,6 +447,11 @@ GAPS - not covered by this run
                                 or they will be silently omitted.
   - Wazuh indexer/dashboard     configs are root-only and not pinned. The
                                 manager config and agent roster ARE captured.
+  - n8n execution HISTORY       deliberately excluded from the dump (schema
+                                is kept, rows are not). ~1,200 executions/day
+                                from the 60s Telegram poll made it 97% of a
+                                39 MB dump. A restore needs workflows and
+                                credentials, not a log of past runs.
   - Pi-hole adlist URLs         live in gravity.db (63 MB). Not extracted:
                                 sqlite3 is absent on the Pi and the native
                                 teleporter export needs sudo. The rest of
@@ -395,7 +461,13 @@ GAPS - not covered by this run
 RESTORE
   n8n:      see n8n-ai-agents/README.md section 7. Requires
             N8N_ENCRYPTION_KEY from Bitwarden - the dump alone is NOT
-            sufficient. Verified working 2026-08-12.
+            sufficient. Verified working 2026-08-12. The restored instance
+            comes up with an EMPTY execution history, by design.
+  job-      restore jobtracker-*.sql into a `jobtracker` database on the
+  finder:   same PostgreSQL instance, then unpack job-finder-source.tar.gz
+            to ~/n8n-stack/job-finder/ and redeploy per its deploy.sh.
+            The workflows inside n8n are BUILD OUTPUT - that directory is
+            the source they come from.
   Proxmox:  guest configs are reference material, not bootable images.
             They rebuild the definition, not the disk contents.
   OPNsense: config.xml rebuilds the ENTIRE firewall. Restore via

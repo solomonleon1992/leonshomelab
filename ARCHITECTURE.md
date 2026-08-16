@@ -239,9 +239,22 @@ Versions verified 2026-08-14; image digests recorded in `n8n-ai-agents/docker-co
 
 Stack dir: `~/n8n-stack/`. Root fs: **62 GB, 41% used, 35 GB free** — extended 2026-08-12, R-04 resolved.
 
-Disk consumption is Docker images (13.8 GB — `ollama/ollama` 10.6 GB, `n8nio/n8n` 2.53 GB, `postgres:15` 633 MB) plus volumes (2.8 GB). The **PostgreSQL database is 15 MB** — execution history is not a growth risk, and `docker system df` reports 0 B reclaimable.
+Disk consumption is Docker images (13.8 GB — `ollama/ollama` 10.6 GB, `n8nio/n8n` 2.53 GB, `postgres:15` 633 MB) plus volumes (2.8 GB).
 
-All four workflows are `active = false`. They are activated on demand rather than left running; see §7.8.
+> **Superseded 2026-08-16.** This section previously read *"the PostgreSQL database is 15 MB — execution history is not a growth risk"* and *"all four workflows are `active = false`"*. **Both are now false.** The old text is quoted rather than deleted because several downstream decisions — the restore test's safety, §7.8's risk assessment — rested on them.
+
+| | 2026-08-12 | 2026-08-16 |
+|---|---|---|
+| Workflows | 4, **all inactive** | **8, four active** |
+| PostgreSQL | 15 MB | **35 MB** |
+| Credentials | 5 | **10** |
+| Executions | effectively none | **~1,200/day** |
+
+Four **job-finder** workflows were added 2026-08-15/16 and are **active** — the first thing in this lab running unattended. `job-finder-approval` polls Telegram `getUpdates` on a 60-second schedule; that is the correct design given there is no public ingress for a Telegram webhook, and it is the source of essentially all the load.
+
+**Execution history is now a growth risk**, reaching 20 MB of the 35 MB database in two days. It is excluded from the Tier 1 dump (§7.10) rather than backed up, but it is **not yet bounded on the host** — no `EXECUTIONS_DATA_PRUNE` variables are set and the image defaults have not been verified.
+
+**Application state lives in a separate `jobtracker` database** on the same PostgreSQL instance (`job_matches`, `bot_state`). The source of truth for the workflows is `~/n8n-stack/job-finder/`; the workflows inside n8n's database are **build output** generated from it.
 
 Environment variables set: `DB_TYPE`, `DB_POSTGRESDB_{HOST,DATABASE,USER,PASSWORD}`, `N8N_ENCRYPTION_KEY`, `N8N_HOST`, `N8N_PORT`, `N8N_PROTOCOL`, `N8N_PROXY_HOPS`, `N8N_SECURE_COOKIE`, `WEBHOOK_URL`. **`N8N_EDITOR_BASE_URL` is not set.**
 
@@ -467,7 +480,13 @@ Sequenced for zero Terry downtime. Steps 1–2 are additive and reversible:
 6. Rename OS hostnames on `docker`, `twingate`, `opnsense`.
 7. Soak two weeks, then drop the `.local` records and the second Caddy site address.
 
-**Terry is not at risk.** It is schedule-triggered (`0 */6 * * *`, and currently deactivated — activated on demand) with entirely outbound nodes (SerpAPI, Anthropic API, Telegram send), has no webhook trigger, and uses no OAuth credentials — so no redirect URI depends on the hostname. Only editor access is affected.
+**Terry is not at risk.** It is schedule-triggered (`0 */6 * * *`, and currently deactivated — activated on demand) with entirely outbound nodes (SerpAPI, Anthropic API, Telegram send) and no webhook trigger.
+
+> **⚠️ Revised 2026-08-16 — Terry is no longer the only thing on this host.** The safety argument above was written when four workflows existed and all were inactive. There are now **eight, four of them active**, and **`job-finder-daily` has a webhook trigger**.
+>
+> A webhook URL is derived from `WEBHOOK_URL` / `N8N_HOST`, so **steps 4–6 will change it.** Identify what calls that webhook and update it in the same window, or the cutover breaks it silently — the workflow stays "active" and simply stops being reached.
+>
+> **OAuth is *not* affected**, despite three Google OAuth2 credentials now existing (Docs, Drive, Sheets). Google rejects `.local` redirect URIs, so authorization is performed against `http://localhost:5678/rest/oauth2-credential/callback` through an SSH tunnel — which is hostname-independent. Existing refresh tokens are unaffected by a rename in any case, since a redirect URI only matters at authorization time. **Do not add OAuth re-authorization to the cutover plan; it is not needed.**
 
 **Do not rename the Proxmox node.** Node renames touch `/etc/pve` node directories and are a known footgun. Change only its DNS record.
 
@@ -501,7 +520,7 @@ Backup is split by what is *irreplaceable* versus what is merely *large*. Confla
 
 | Host | Captured |
 |---|---|
-| VM 105 | n8n database (with dump validation), compose file, restore harness, docker state |
+| VM 105 | n8n database (**execution history excluded**, dump validated), **`jobtracker` database**, **`job-finder/` source tree**, compose file, restore harness, docker state |
 | VM 102 | Caddyfile, three compose files, Caddy root CA *certificate*, `docker inspect` for the R-13 containers, docker state |
 | Proxmox | qemu-server + LXC guest configs, inventory, network config |
 | **Pi-hole** | **`pihole.toml`** — the local DNS A records and CNAMEs the §7.8 migration depends on — plus `dnsmasq.conf` and version/state |
@@ -520,7 +539,23 @@ Backup is split by what is *irreplaceable* versus what is merely *large*. Confla
 
 **Two gaps recorded rather than hidden.** Pi-hole's adlist URLs live inside `gravity.db` (63 MB, overwhelmingly regenerable blocklist content); extracting just the URLs needs `sqlite3`, absent on the Pi, and the native teleporter export needs sudo. Full VM images remain Tier 2.
 
-Verified run 2026-08-14: **26/26 items, 0.57 MB staged → 104 KB encrypted**, staging deleted, transient sudo copies removed from the Wazuh host, archive unlistable without the password.
+**Two corrections on 2026-08-16, in opposite directions.**
+
+The job-finder agents added 2026-08-15/16 exposed a real gap and a real waste at the same time. Their application state lives in a **separate `jobtracker` database**, which `pg_dump n8n` never touched — 359 job matches were **unbacked-up from creation**. Meanwhile the 60-second Telegram poll drove n8n's own dump from 406 KB to **39 MB in two days, 97% of it execution history** — data with no restore value at all.
+
+So the backup was capturing 38 MB of noise daily while missing the 3.2 MB that mattered. Both were fixed together: execution *rows* are excluded (the *schema* is kept, so a restored instance works and simply starts with an empty history), and `jobtracker` plus the `job-finder/` source tree are now captured.
+
+`~/n8n-stack/job-finder/` matters because **the workflows in n8n's database are build output** — `build.js`, `deploy.sh`, the workflow JSON and the scoring prompt exist only in that directory, not in git and not in the database.
+
+| Run | Items | Archive |
+|---|---:|---:|
+| 2026-08-14 | 26 | 104 KB |
+| 2026-08-16, before fix | 26 | 860 KB |
+| **2026-08-16, after fix** | **29** | **670 KB** |
+
+Verified: staging deleted, transient copies removed from both the n8n and Wazuh hosts, archive unlistable without the password.
+
+**The restore procedure has not been re-verified against the new dump format.** The 2026-08-12 test used a full dump; this one excludes execution rows. The change is low-risk — `--exclude-table-data` preserves DDL — but by this repository's own standard that makes it an untested assumption. Fold it into the quarterly re-verification due **2026-11-12**.
 
 **Why Tier 2 is deferred, and why that is defensible.** Tier 2 requires storage hardware that does not exist, and relocating backups to `local-lvm` would not help — both storages sit on the same `/dev/sda` (§1.2).
 
@@ -610,3 +645,4 @@ A second read-only pass on 2026-08-12 covered VM 105 (LVM, filesystem, Docker st
 | 2026-08-14 | **SSH access established to all three previously "blocked" hosts, and a recorded root cause corrected.** Verified by hand by the maintainer. **Pi-hole key auth already worked** — `ssh -v` authenticates via `publickey` with the existing ed25519 key; it was never blocked, the obstacle was assumed and never tested. **Wazuh** was password-only; the public key was deployed over SSH and re-verified, with no Proxmox console needed. **OPNsense was the only genuine blocker — and §3.3's stated cause was wrong.** The GUI does not bind only to LAN; OPNsense binds it to all interfaces. The real cause was **"Block private networks" on WAN**, which generates an implicit block rule above all user-defined rules and dropped every `192.168.0.0/24` packet, ICMP included. Fixed by disabling that setting and adding two WAN pass rules (source `192.168.0.0/24`, destination WAN address, TCP 443 and 22); root login enabled then restricted to **key-only**; GUI password changed into Bitwarden. New **§3.4** documents the **WAN/LAN inversion** — `em1`/WAN faces the trusted home network while `em0`/LAN is the isolated lab segment — because a WAN rule permitting management reads as a misconfiguration without that context. §7.6 rewritten with the access matrix, the six SSH aliases, the **GUI-managed `authorized_keys` gotcha** (manual edits are silently overwritten from `config.xml` on any GUI apply, so `ansible.posix.authorized_key` will be reverted), and a **lockout recovery procedure** (`pfctl -d`, then `configctl filter reload`; never `pfctl -e`). The prior "do not use `pfctl -d`" instruction was wrong and is reversed. Downstream claims corrected in §7.10 and §9. |
 | 2026-08-14 | **Tier 1 backup extended from three hosts to five** (§7.10). `scripts/Backup-Tier1.ps1` now captures **OPNsense `/conf/config.xml`** — the entire firewall, including the WAN rules fixed earlier today, which previously existed nowhere but that VM — and **Pi-hole `pihole.toml`**, which holds the local DNS A records and CNAMEs the §7.8 migration depends on. `config.xml` is validated by size floor **and XML parse**, mirroring the n8n dump's completion-marker check: a truncated firewall config fails silently in exactly the same way. Verified run: **22/22 items, 0.56 MB staged → 101 KB encrypted**, staging deleted, archive unlistable without the password. Three implementation facts found by probing rather than assumption — OPNsense's root shell is **tcsh**, so `ssh` commands need a `/bin/sh -c` wrapper (`scp` is unaffected); Pi-hole's native `pihole-FTL --teleporter` **fails without sudo** because it must read `pihole-FTL.db`; and `sqlite3` is **not installed** on the Pi, so adlist URLs cannot be extracted from `gravity.db` without shipping 63 MB. **Wazuh remains uncovered** — SSH works but every config path is root-only with no passwordless sudo, recorded as a privilege decision (§7.6) rather than worked around. The script's stale "no SSH key access" text is gone from both its header and the per-run manifest. |
 | 2026-08-14 | **Wazuh added — Tier 1 now covers all six hosts** (§7.10). Access via an **argument-pinned** sudoers rule at `/etc/sudoers.d/wazuh-backup`, granting read of `ossec.conf` and `client.keys` and nothing else; verified with the credential cache cleared that unpinned paths and appended second paths are both refused. `sudo -n` is used so removal of the rule fails the run loudly rather than hanging on a prompt. **The archive now carries agent authentication material** — `client.keys` — which is the deliberate price of restoring Wazuh without re-enrolling every agent, and the reason `IaC-MIGRATION.md` §8 can exclude Wazuh from IaC at all; the control is AES-256 plus a password held outside the lab's failure domain, stated in full in the new `scripts/README.md`. **Implementation correction:** a strict XML parse **fails on a healthy `ossec.conf`**, because Wazuh permits multiple root-level `<ossec_config>` blocks and this install has two — it would have marked every nightly run failed. Validation wraps the content in a synthetic root instead, which tolerates multiple roots and still rejects truncation (verified by chopping the real file). **Scope condition recorded:** `local_rules.xml` and `local_decoder.xml` are stock and deliberately unpinned; writing custom rules or decoders requires extending both the sudoers rule and the script, or they are omitted silently. Verified run: **26/26 items, 0.57 MB staged → 104 KB encrypted**, 2 agent entries, transient sudo copies cleaned from the Wazuh host. |
+| 2026-08-16 | **Four job-finder workflows added to VM 105 (by the maintainer, 08-15/16) — the first thing in this lab running unattended.** Review found one data-loss gap and one waste, fixed together (§7.10). **`jobtracker`, a separate database holding the system's actual state (359 job matches), was never backed up** — `pg_dump n8n` does not include it. Simultaneously the 60-second Telegram poll drove n8n's dump from 406 KB to **39 MB in two days, 97% execution history**, so the backup was storing 38 MB of noise daily while missing the 3.2 MB that mattered. Execution *rows* are now excluded (schema retained), and `jobtracker` plus the `~/n8n-stack/job-finder/` **source tree** — the workflows in the database are build output — are captured. Net: **29 items, 860 KB → 670 KB**, with 3.3 MB more real content. **§4 superseded** — "the database is 15 MB, execution history is not a growth risk" and "all four workflows are `active = false`" are both now false (8 workflows, 4 active, 35 MB, 10 credentials). **§7.8 revised** — `job-finder-daily` **has a webhook trigger**, so the `.internal` cutover will change its URL; a claimed-obvious OAuth risk was investigated and **found not to apply**, because Google rejects `.local` redirect URIs and authorization already runs against `localhost` through an SSH tunnel. Execution growth is excluded from backups but **still unbounded on the host** — no prune variables set. |

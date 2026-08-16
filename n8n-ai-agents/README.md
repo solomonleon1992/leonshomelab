@@ -1,6 +1,8 @@
 # n8n AI Agents
 
-**Documentation status:** Deploy ✅ · Config ✅ · Creds ✅ · Backup ✅ · Restore ✅ · Restore tested **2026-08-12**
+**Documentation status:** Deploy ✅ · Config ✅ · Creds ✅ · Backup ✅ · Restore ✅ · Restore tested **n8n 2026-08-12 · `jobtracker` 2026-08-16**
+
+> **Verified 2026-08-16.** Four job-finder workflows were added on 08-15/16 and are **active** — this host now runs unattended, which it did not before. That invalidated the restore procedure's safety precondition (§7), the credential list (§5), and the workflow inventory (§9). All three are corrected below. The n8n dump format also changed (execution history excluded) and has **not** been re-verified since — see §7.
 
 > Self-hosted n8n workflow automation running the lab's AI agents, backed by PostgreSQL with a local Ollama LLM alongside the Anthropic API.
 
@@ -162,7 +164,18 @@ Names carry the `n8n-stack_` compose project prefix. Total volume footprint 2.8 
 
 **No values in this repository.** Credentials inside n8n are encrypted at rest in PostgreSQL using `N8N_ENCRYPTION_KEY`.
 
-Five credentials are stored in the database, verified 2026-08-12: `anthropicApi`, `serpApi`, `telegramApi`, `ollamaApi`, `googlePalmApi`. The Gemini credential was undocumented until the restore test surfaced it.
+**Ten credentials** are stored in the database, verified 2026-08-16 — up from five on 08-12:
+
+| Type | Count | Added |
+|---|---|---|
+| `anthropicApi`, `serpApi`, `ollamaApi`, `googlePalmApi` | 4 | pre-existing |
+| `telegramApi` | **2** | one pre-existing, one for the job-finder bot |
+| `googleDocsOAuth2Api`, `googleDriveOAuth2Api`, `googleSheetsOAuth2Api` | 3 | 2026-08-15/16, job-finder |
+| `httpHeaderAuth`, `postgres` | 2 | 2026-08-15/16, job-finder |
+
+The Gemini (`googlePalmApi`) credential was undocumented until the 2026-08-12 restore test surfaced it — a reminder that this list is only as good as its last verification.
+
+**The Google OAuth2 credentials do not depend on the lab hostname.** Google rejects `.local` redirect URIs, so authorization runs against `http://localhost:5678/rest/oauth2-credential/callback` through an SSH tunnel. The `.internal` migration does not require re-authorizing them (`ARCHITECTURE.md` §7.8).
 
 ---
 
@@ -172,17 +185,30 @@ Five credentials are stored in the database, verified 2026-08-12: `anthropicApi`
 
 | Component | Why | Where it is |
 |---|---|---|
-| **PostgreSQL dump** | Workflows and encrypted credentials | `pg_dump`, below |
+| **n8n PostgreSQL dump** | Workflows and encrypted credentials | `pg_dump`, below |
 | **`N8N_ENCRYPTION_KEY`** | Without it the dump's credentials are undecryptable | ✅ Bitwarden (2026-08-12) |
 | **`docker-compose.yml`** | Reproduces the environment the key belongs to | Host only |
+| **`jobtracker` database** | The job-finder's actual state — 359 job matches, bot state. **A separate database; `pg_dump n8n` does not include it** | ✅ added 2026-08-16 |
+| **`~/n8n-stack/job-finder/`** | The workflows in n8n are build output; this is the source they come from, and it is in no other place | ✅ added 2026-08-16 |
 
-> **A dump alone will not restore this service.** Restored without the original encryption key, all four workflows come back intact, correctly wired, and completely non-functional — every credential decrypts to garbage. The key is not in the dump.
+> **A dump alone will not restore this service.** Restored without the original encryption key, every workflow comes back intact, correctly wired, and completely non-functional — each credential decrypts to garbage. The key is not in the dump.
+
+> **`jobtracker` was unprotected from creation until 2026-08-16.** It was created on 08-15 and `pg_dump n8n` never touched it. If you add another database to this PostgreSQL instance, it is **not** backed up until `Backup-Tier1.ps1` is told about it explicitly.
 
 ### Command
 
 ```bash
-docker exec n8n-postgres pg_dump -U n8n n8n > ~/n8n-backup-$(date +%Y%m%d).sql
+# n8n — execution HISTORY excluded, execution SCHEMA retained
+docker exec n8n-postgres pg_dump -U n8n n8n \
+  --exclude-table-data=execution_data --exclude-table-data=execution_entity \
+  --exclude-table-data=execution_metadata --exclude-table-data=execution_annotations \
+  > ~/n8n-backup-$(date +%Y%m%d).sql
+
+# job-finder state — a SEPARATE database
+docker exec n8n-postgres pg_dump -U n8n jobtracker > ~/jobtracker-$(date +%Y%m%d).sql
 ```
+
+**Why execution history is excluded.** The 60-second Telegram poll drove the n8n dump from 406 KB to **39 MB in two days, 97% of it execution logs**. A restore needs workflows, credentials and settings — not a record of past runs. `--exclude-table-data` keeps the `CREATE TABLE`, so a restored instance works and simply starts with an empty history. Measured 2026-08-16: 39.1 MB full versus 928 KB excluded.
 
 ### Current state — honest
 
@@ -192,10 +218,14 @@ docker exec n8n-postgres pg_dump -U n8n n8n > ~/n8n-backup-$(date +%Y%m%d).sql
 | Mechanism | ✅ `scripts/Backup-Tier1.ps1` — pulls over SSH, validates the dump, writes a manifest, retains 14 runs |
 | Off-host | ✅ Replicated to the MSI Katana laptop — separate physical hardware from `/dev/sda` |
 | Encrypted at rest | ✅ 7-Zip AES-256 with encrypted headers; plaintext staging deleted after each run (`ARCHITECTURE.md` §7.11) |
-| Validation | ✅ Size plus `PostgreSQL database dump complete` marker checked on every run |
+| Validation | ✅ Size plus `PostgreSQL database dump complete` marker on every run — **`-Tail 20`, not 5** (see below) |
+| `jobtracker` covered | ✅ Since 2026-08-16 — **restore-verified the same day** |
+| `job-finder/` source | ✅ Since 2026-08-16 |
 | Covers the VM image | ❌ Database and configuration only — Tier 2 remains open (`ARCHITECTURE.md` §7.10) |
 
-Database size is 15 MB; a dump is roughly 405 KB. **The irreplaceable data here is tiny** — getting it off-host was never a storage-capacity problem.
+Current sizes (2026-08-16): the n8n database is **35 MB** but dumps to **928 KB** with execution history excluded; `jobtracker` dumps to **3.2 MB**; the `job-finder/` tree is 216 KB. **The irreplaceable data here is still small** — getting it off-host was never a storage-capacity problem.
+
+> **The marker check must stay at `-Tail 20`.** In a real dump the `PostgreSQL database dump complete` line sits at line **552 of 556** — exactly five from the end, because `pg_dump` 15.18 writes a trailing `\unrestrict` line after it. A `-Tail 5` check was one future `pg_dump` line away from reporting FAIL on healthy dumps and failing every nightly run. Found by the 2026-08-16 `jobtracker` restore test; do not narrow it again.
 
 > A stale copy also lives at `~/n8n-backup-20260802.sql` on VM 105. It is a valid dump, superseded by the automated backups. A 0-byte file of the same name on VM 102 was a failed attempt from the wrong host and was deleted 2026-08-12 — **verify dump size after every backup; an empty file looks exactly like a real one in `ls`.**
 
@@ -269,7 +299,20 @@ cd ~ && rm -rf ~/n8n-restore-test            # also removes the .env holding the
 
 > ⚠️ `docker compose down -v` destroys volumes. The same command run from `~/n8n-stack` would delete the production database. Check `docker compose ls` first.
 
-**Safe only while workflows are inactive.** A restored instance with *active* workflows would begin firing schedule triggers in parallel with production — duplicate Telegram messages and duplicate API spend. Confirm `active = false` on all workflows before re-testing.
+> ### ⚠️ STOP — this precondition changed on 2026-08-16
+>
+> This procedure was written when **every** workflow was inactive. That is what made it safe. **Four are now active**, including `job-finder-approval`, which polls Telegram every 60 seconds.
+>
+> A restored instance carries the *same credentials* — the same Telegram bot token, the same Google OAuth tokens. Restoring with those workflows active means a second instance polling the same bot, consuming the same approval replies, and writing to the same Google Sheet and Drive folder as production. **The harness isolates the database, the network and the port. It does not isolate external side effects.**
+>
+> **Deactivate them in the restored database before starting n8n** — between step 4 (restore) and step 5 (start n8n):
+>
+> ```bash
+> docker exec n8n-restore-postgres psql -U n8n -d n8n \
+>   -c "UPDATE workflow_entity SET active = false;"
+> ```
+>
+> Run that against `n8n-restore-postgres`, the throwaway container — **never** against production. Deactivating in the *restored* copy is safer than deactivating production, because it leaves your live job search untouched.
 
 ---
 
@@ -286,7 +329,7 @@ docker exec n8n-postgres pg_isready -U n8n
 
 # Workflows present
 docker exec n8n-postgres psql -U n8n -d n8n -c "SELECT id, name, active FROM workflow_entity;"
-# expect: 4 rows
+# expect: 8 rows, 4 with active = true (see §9)
 
 # Version
 docker exec n8n n8n --version        # expect 2.31.4
@@ -301,16 +344,32 @@ df -h /                              # expect ~41% used, not >80%
 
 ## 9. Workflows
 
-All four are **`active = false`** — activated on demand rather than left running. This is deliberate.
+**Eight workflows, four active** — verified 2026-08-16. This changed materially on 2026-08-15/16: until then nothing on this host ran unattended.
 
-| ID | Name | Active | Last modified |
+| ID | Name | Active | Belongs to |
 |---|---|---|---|
-| `w53g2XfgOCRmtErG` | **Terry — Laptop eBay Deal Finder** | `false` | 2026-07-21 |
-| `fXKsIhcBdngSIvEZ` | Angie — personal AI assistant, Telegram voice and text | `false` | 2026-07-27 |
-| `ZnmGRqszMk76GnaQ` | Harry — Headless YT Creator | `false` | 2026-05-21 |
-| `xSzXTcw8pRWjGWY4` | My workflow | `false` | 2026-05-21 |
+| `jobFinderDaily01` | job-finder-daily | ✅ | job-finder |
+| `jobFinderApprov1` | job-finder-approval | ✅ | job-finder |
+| `jobFinderCovLtr1` | job-finder-cover-letter | ✅ | job-finder |
+| `clBackfill00001` | cl-backfill | ✅ | job-finder |
+| `w53g2XfgOCRmtErG` | **Terry — Laptop eBay Deal Finder** | ❌ | — |
+| `fXKsIhcBdngSIvEZ` | Angie — personal AI assistant, Telegram voice and text | ❌ | — |
+| `ZnmGRqszMk76GnaQ` | Harry — Headless YT Creator | ❌ | — |
+| `xSzXTcw8pRWjGWY4` | My workflow | ❌ | — |
 
-`execution_entity` currently holds 0 rows, consistent with n8n's default 14-day execution pruning and no recent runs.
+### The job-finder is documented elsewhere — deliberately not duplicated here
+
+The four `job-finder*` workflows are **build output**. Their source of truth is `~/n8n-stack/job-finder/` on VM 105 — `build.js`, `codenodes.js`, `deploy.sh`, the workflow JSON and the scoring prompt — and their design documentation lives in a **different Claude Code project's memory**:
+
+```
+C:\Users\leons\.claude\projects\C--Users-leons-OneDrive-Desktop-resume\memory\
+```
+
+That covers the build → deploy → `publish:workflow` → `docker restart n8n` sequence, the Google Drive and Sheets resource IDs, deliberate design constraints that must **not** be "improved" away, and n8n 2.31.4 behaviours verified the hard way. **Read it before editing anything job-finder.**
+
+Reproducing that content here would create a second source of truth that drifts within a week — `SERVICE-TEMPLATE.md` non-negotiable #4 ("link, do not duplicate"), applied one level out. This repository owns **where it runs** (§1), **what backs it up** (§6), **what breaks if it dies** (`ARCHITECTURE.md` §6), and **the restore safety rules** (§7). The resume project owns the rest.
+
+**Execution volume.** `job-finder-approval` polls Telegram on a 60-second schedule, producing roughly 1,200 executions/day. `execution_entity` held **1,641 rows** on 2026-08-16 — this README previously said 0, which was true when nothing was active. See §6 for why execution history is now excluded from backups.
 
 ### Terry — Laptop Deal Finder
 
@@ -378,3 +437,4 @@ Postgres is only 15 MB and `docker system df` reports 0 B reclaimable — if the
 | 2026-08-12 | Rewritten against `SERVICE-TEMPLATE.md`. Corrected "bare metal" → Proxmox VM 105. Corrected volume names (compose prefix) and nemotron-mini size (4 GB → 2.7 GB). Added verified image sizes, backup/restore procedures, and verification commands. Recorded workflow inventory and `active = false` state. |
 | 2026-08-12 | Root LV extended 31 → 62 GB online; R-04 resolved. `N8N_ENCRYPTION_KEY` copied to Bitwarden; R-03 partially resolved. |
 | 2026-08-12 | **Restore verified end to end** against the off-host artifact — 4 workflows, 5 credentials, `export:credentials --decrypted` exit 0. Production untouched. Status line moved to `Restore ✅ / tested 2026-08-12`, quarterly re-verification set. Google Gemini credential discovered and documented. Test harness stored at `~/n8n-stack/scripts/restore-verification.sh` on VM 105. |
+| 2026-08-16 | **Four job-finder workflows added (by the maintainer, 08-15/16) and left active** — this host now runs unattended, which it never had before. Three parts of this README were invalidated at once and are corrected here. **§7's safety precondition was the dangerous one:** "safe only while workflows are inactive" was written when all four workflows were inactive, and the quarterly re-verification is due 2026-11-12. A restored instance shares the *credentials* in the dump, so restoring with the job-finder active would mean a second instance polling the same Telegram bot and writing to the same Google Sheet and Drive folder — the harness isolates database, network and port, **not external side effects**. Replaced with an explicit `UPDATE workflow_entity SET active = false` against the *restored* database, which leaves production untouched. **§5:** credentials 5 → **10**, and recorded that the new Google OAuth2 credentials do **not** tie to the lab hostname (Google rejects `.local`; authorization runs against `localhost` via SSH tunnel), so the `.internal` migration needs no re-authorization. **§9:** inventory 4 → 8 workflows, rewritten as a **pointer** to the resume project's memory rather than a duplicated inventory — the job-finder workflows are build output from `~/n8n-stack/job-finder/`, and copying its design docs here would create a second source of truth that drifts. **§6:** `jobtracker` and the `job-finder/` source tree added to the backup after being unprotected since creation; n8n execution history excluded (39.1 MB → 928 KB); marker validation widened to `-Tail 20` after the `jobtracker` restore test found the completion marker sits exactly 5 lines from the end. **`jobtracker` restore verified 2026-08-16** — 359/359 rows, identical md5 across every `cover_letter_doc_id`. |

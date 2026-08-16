@@ -173,7 +173,13 @@ if ($LASTEXITCODE -eq 0) {
     # failure produced a fake backup on VM 102 that went unnoticed for 10 days.
     if (Test-Path $dumpLocal) {
         $len  = (Get-Item $dumpLocal).Length
-        $tail = Get-Content $dumpLocal -Tail 5 | Out-String
+        # -Tail 20, not 5. The completion marker sits at line 552 of 556 in a
+        # real dump - EXACTLY 5 from the end - because pg_dump 15.18 emits a
+        # trailing `\unrestrict` line and blanks after it. One more trailing
+        # line from any future pg_dump and a -Tail 5 check would report FAIL on
+        # a perfectly healthy dump, failing the whole run every night. Found by
+        # the 2026-08-16 jobtracker restore test.
+        $tail = Get-Content $dumpLocal -Tail 20 | Out-String
         if ($len -lt 1024) {
             Add-Result 'n8n dump validation' 'FAIL' "only $len bytes - empty or truncated"
         } elseif ($tail -notmatch 'PostgreSQL database dump complete') {
@@ -205,7 +211,7 @@ if ($LASTEXITCODE -eq 0) {
     Get-RemoteFile 'n8n' $jtRemote $jtLocal 'jobtracker PostgreSQL dump'
     if (Test-Path $jtLocal) {
         $jtLen  = (Get-Item $jtLocal).Length
-        $jtTail = Get-Content $jtLocal -Tail 5 | Out-String
+        $jtTail = Get-Content $jtLocal -Tail 20 | Out-String   # see the note on -Tail 20 above
         if ($jtLen -lt 1024) {
             Add-Result 'jobtracker dump validation' 'FAIL' "only $jtLen bytes - empty or truncated"
         } elseif ($jtTail -notmatch 'PostgreSQL database dump complete') {

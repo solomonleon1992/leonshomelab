@@ -89,6 +89,7 @@ A backup that looks fine and is empty is worse than no backup: it stops you look
 | Artifact | Check |
 |---|---|
 | n8n `pg_dump` | Size floor **and** the `PostgreSQL database dump complete` trailer |
+| `jobtracker` `pg_dump` | Size floor **and** the completion trailer |
 | OPNsense `config.xml` | Size floor **and** an XML parse |
 | Wazuh `ossec.conf` | Size floor **and** a *wrapped* XML parse — see below |
 | Wazuh `client.keys` | Size floor, plus a count of agent entries |
@@ -110,7 +111,11 @@ Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
 | **Pi-hole** | Files drop back into `/etc/pihole/`, restart `pihole-FTL`. Adlists must be re-added by hand |
 | **Proxmox** | Guest configs are **reference material, not bootable images** — they rebuild the definition, not the disk contents |
 
-**Only the n8n leg has actually been executed.** Everything else is a written procedure, which `SERVICE-TEMPLATE.md` correctly calls a hypothesis. Re-verify n8n quarterly — **next due 2026-11-12**.
+**Two legs have been executed: n8n (2026-08-12) and `jobtracker` (2026-08-16).** Everything else is a written procedure, which `SERVICE-TEMPLATE.md` correctly calls a hypothesis. Re-verify quarterly — **next due 2026-11-12**.
+
+The `jobtracker` test restored from the **actual encrypted archive** into a throwaway database: `psql` exit 0, 0 errors, 359/359 rows, 7/7 approved with letters, and an identical md5 across every `cover_letter_doc_id`.
+
+**Why the marker check is `-Tail 20` and not `-Tail 5`.** That test found the completion marker sits at line **552 of 556** in a real dump — exactly 5 from the end, because `pg_dump` 15.18 writes a trailing `\unrestrict` line after it. A `-Tail 5` check was one future `pg_dump` line away from failing every run on healthy data. Do not narrow it again.
 
 ---
 
@@ -128,6 +133,7 @@ Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
 
 | Date | Change |
 |---|---|
+| 2026-08-16 | **`jobtracker` restore verified** — restored from the actual encrypted archive into a throwaway database: exit 0, 0 errors, 359/359 rows, identical md5 across every `cover_letter_doc_id`. The test **found a latent bug**: the dump's completion marker sits exactly 5 lines from the end, so the `-Tail 5` validation was one future `pg_dump` line away from failing every run on healthy data. Widened to `-Tail 20`. |
 | 2026-08-16 | **`jobtracker` database and the `job-finder/` source tree added; n8n execution history excluded.** The job-finder agents keep their state in a separate database that `pg_dump n8n` never touched — 359 job matches were unbacked-up from creation. At the same time the 60-second Telegram poll had driven the n8n dump to 39 MB, 97% of it execution history. Both fixed together: **29 items, 860 KB → 670 KB, carrying 3.3 MB more real content**. Restore has not been re-verified against the new dump format — folded into the 2026-11-12 quarterly check. |
 | 2026-08-14 | **Wazuh added** via an argument-pinned sudoers rule — Tier 1 now covers all six hosts, 26/26 items. `client.keys` capture documented as a deliberate trade (§2). Wrapped-XML validation adopted after a strict parse was found to fail on healthy multi-root `ossec.conf`. This README created. |
 | 2026-08-14 | **OPNsense and Pi-hole added** (three hosts → five). `config.xml` XML-parse validated. Scheduled task's battery restrictions removed after runs were silently skipped. |

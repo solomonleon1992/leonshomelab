@@ -555,7 +555,22 @@ So the backup was capturing 38 MB of noise daily while missing the 3.2 MB that m
 
 Verified: staging deleted, transient copies removed from both the n8n and Wazuh hosts, archive unlistable without the password.
 
-**The restore procedure has not been re-verified against the new dump format.** The 2026-08-12 test used a full dump; this one excludes execution rows. The change is low-risk — `--exclude-table-data` preserves DDL — but by this repository's own standard that makes it an untested assumption. Fold it into the quarterly re-verification due **2026-11-12**.
+**`jobtracker` restore verified 2026-08-16 — first test, not a re-test.** The dump was extracted from the **actual encrypted archive**, shipped to VM 105, and restored into a throwaway `jobtracker_restoretest` database. `psql` exit 0, **0 errors**, and every field matched production:
+
+| | Production | Restored |
+|---|---:|---:|
+| `job_matches` rows | 359 | 359 |
+| approved | 7 | 7 |
+| with cover letter | 7 | 7 |
+| sheet-synced | 7 | 7 |
+| `bot_state` rows | 2 | 2 |
+| md5 of all `cover_letter_doc_id` | `254d1a4c…` | `254d1a4c…` |
+
+The fingerprint is the meaningful line: content identity of the field that would be most expensive to reconstruct, not merely matching row counts. Test database dropped, temp files removed from both machines, production untouched at 359 rows with `n8n-postgres` uptime unbroken at 3 weeks.
+
+**The test found a latent bug.** In a real dump the `PostgreSQL database dump complete` marker sits at line **552 of 556** — *exactly* 5 lines from the end, because `pg_dump` 15.18 emits a trailing `\unrestrict` line after it. Both dump validations used `-Tail 5`, so **one additional trailing line from any future `pg_dump` would have reported FAIL on a healthy dump and failed the entire run, nightly**. Widened to `-Tail 20`. This is precisely the class of fault a restore test exists to surface and a passing backup never would.
+
+**The n8n dump format change has still not been re-verified.** The 2026-08-12 test used a full dump; the current one excludes execution rows. `--exclude-table-data` preserves DDL so the risk is low, but it remains an untested assumption — folded into the quarterly re-verification due **2026-11-12**.
 
 **Why Tier 2 is deferred, and why that is defensible.** Tier 2 requires storage hardware that does not exist, and relocating backups to `local-lvm` would not help — both storages sit on the same `/dev/sda` (§1.2).
 

@@ -1,0 +1,17 @@
+# Caddy — reverse proxy on VM 102
+#
+# Deployed by ansible/caddy.yml to ~/docker/caddy/Caddyfile.
+# This file is the source of truth; the host copy is generated.
+#
+# The upstream is addressed BY IP, not by hostname. That is deliberate and it
+# is what makes the .local -> .internal migration cheap: only the site address
+# changes, and Caddy issues a new leaf from the SAME root CA, so no client
+# needs to re-trust anything (ARCHITECTURE.md §7.8).
+#
+# `tls internal` means Caddy's own CA signs this. Adding or changing a
+# hostname reuses the existing root; it does not regenerate it.
+
+n8n.leonshomelab.local {
+    tls internal
+    reverse_proxy 192.168.0.28:5678
+}

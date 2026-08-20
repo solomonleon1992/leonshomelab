@@ -1,0 +1,158 @@
+---
+# Caddy — reverse proxy and internal CA on VM 102.
+#
+# IaC-MIGRATION.md §6, position 4. The first conversion where getting it wrong
+# is genuinely expensive.
+#
+#     ansible-playbook caddy.yml --check --diff
+#     ansible-playbook caddy.yml
+#
+# WHAT IS AT STAKE
+# caddy_caddy_data holds the internal root CA private key. ARCHITECTURE.md
+# §7.9 deliberately does not back it up: losing it costs a trust-store
+# re-import on every client, and that was judged cheaper than keeping a second
+# permanent copy of a Tier-0 secret. Losing the volume therefore has no undo.
+#
+# This playbook takes the root CA's fingerprint BEFORE and AFTER and fails if
+# it changed. A new fingerprint means a new certificate authority, which means
+# every client must re-trust — and it would otherwise look like a clean run.
+
+- name: Caddy
+  hosts: Docker-Host
+  gather_facts: false
+
+  vars:
+    caddy_dir: /home/leon/docker/caddy
+    caddy_site: n8n.leonshomelab.local
+    ca_path: /data/caddy/pki/authorities/local/root.crt
+
+  tasks:
+
+    - name: Verify docker is present before changing anything
+      ansible.builtin.command: docker --version
+      changed_when: false
+      check_mode: false
+
+    # Both volumes must already exist. This playbook will NEVER create them:
+    # an auto-created caddy_caddy_data means Caddy generates a fresh root CA
+    # on startup and every client silently stops trusting it.
+    - name: Check the Caddy volumes exist
+      ansible.builtin.command: "docker volume inspect {{ item }}"
+      loop:
+        - caddy_caddy_data
+        - caddy_caddy_config
+      register: vol_check
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Fail clearly if either volume is absent
+      ansible.builtin.assert:
+        that: vol_check.results | selectattr('rc', 'ne', 0) | list | length == 0
+        fail_msg: >-
+          A Caddy volume is missing. This playbook will NOT create one.
+          caddy_caddy_data holds the internal root CA private key; starting
+          without it generates a NEW authority and every client that trusts
+          the current one stops working, with no error shown anywhere.
+          See ARCHITECTURE.md §7.9 before proceeding.
+        success_msg: both Caddy volumes present — existing CA will be preserved
+
+    - name: Capture root CA fingerprint BEFORE
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        docker exec caddy cat {{ ca_path }}
+        | openssl x509 -noout -fingerprint -sha256
+      args:
+        executable: /bin/bash
+      register: ca_before
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Ensure stack directory exists
+      ansible.builtin.file:
+        path: "{{ caddy_dir }}"
+        state: directory
+        mode: "0775"
+
+    - name: Deploy Caddyfile from the repository
+      ansible.builtin.copy:
+        src: ../docker/Caddyfile
+        dest: "{{ caddy_dir }}/Caddyfile"
+        mode: "0664"
+      register: caddyfile
+
+    - name: Deploy compose file from the repository
+      ansible.builtin.copy:
+        src: ../docker/caddy.example.yml
+        dest: "{{ caddy_dir }}/docker-compose.yml"
+        mode: "0664"
+      register: compose_file
+
+    - name: Bring the stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ caddy_dir }}"
+        state: present
+      register: compose_up
+
+    # Forced to loopback deliberately.
+    #
+    # VM 102's /etc/resolv.conf points at 8.8.8.8, so this host cannot resolve
+    # any lab name - including the site Caddy serves. Verified 2026-08-20:
+    # `getent hosts n8n.leonshomelab.local` returns nothing here, while Pi-hole
+    # answers 192.168.0.25 correctly for anyone who asks it.
+    #
+    # --resolve still exercises the real path: TLS with correct SNI, Caddy's
+    # site matching, and the reverse proxy through to n8n. Using the `uri`
+    # module against the bare hostname would fail on DNS, not on Caddy.
+    - name: Verify the proxied site answers over HTTPS
+      ansible.builtin.command: >-
+        curl -sk -m 10 -o /dev/null -w '%{http_code}'
+        --resolve {{ caddy_site }}:443:127.0.0.1
+        https://{{ caddy_site }}/
+      register: https_check
+      changed_when: false
+      retries: 6
+      delay: 5
+      until: https_check.stdout == '200'
+      # Read-only. Runs in check mode too, so a dry run reports whether the
+      # site is healthy NOW rather than retrying six times against nothing.
+      check_mode: false
+
+    - name: Capture root CA fingerprint AFTER
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        docker exec caddy cat {{ ca_path }}
+        | openssl x509 -noout -fingerprint -sha256
+      args:
+        executable: /bin/bash
+      register: ca_after
+      changed_when: false
+      check_mode: false
+
+    # The most important assertion in this repository. A changed fingerprint
+    # means a new certificate authority: leaf certs still issue, the site
+    # still serves HTTPS, and every existing client rejects it. Nothing else
+    # in the run would look wrong.
+    - name: Fail if the root CA changed
+      ansible.builtin.assert:
+        that: ca_after.stdout == ca_before.stdout
+        fail_msg: >-
+          THE ROOT CA CHANGED. Before: {{ ca_before.stdout | default('unknown') }}
+          After: {{ ca_after.stdout }}.
+          Caddy has generated a new authority, which means every client that
+          trusted the old one will now reject this site. Stop and investigate
+          the volume binding before touching anything else.
+        success_msg: "root CA unchanged — clients keep trusting"
+      when:
+        - ca_before.stdout is defined
+        - ca_before.stdout | length > 0
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Caddy — HTTPS {{ https_check.stdout | default('not probed (check mode)') }},
+          root CA {{ 'UNCHANGED' if ca_after.stdout | default('') == ca_before.stdout | default('x') else 'CHANGED — INVESTIGATE' }},
+          Caddyfile {{ 'rewritten' if caddyfile.changed else 'unchanged' }},
+          compose {{ 'rewritten' if compose_file.changed else 'unchanged' }},
+          stack {{ 'converged' if compose_up.changed else 'already correct' }}

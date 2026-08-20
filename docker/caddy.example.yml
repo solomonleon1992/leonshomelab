@@ -1,0 +1,46 @@
+# Caddy — reverse proxy and internal CA on VM 102
+#
+# Deployed by ansible/caddy.yml to ~/docker/caddy/docker-compose.yml.
+#
+# ===========================================================================
+# THE VOLUMES ARE THE WHOLE POINT OF BEING CAREFUL HERE.
+#
+# caddy_caddy_data holds the INTERNAL ROOT CA PRIVATE KEY. ARCHITECTURE.md
+# §7.9 deliberately does NOT back that key up - the reasoning is that
+# regenerating costs one trust-store re-import while backing it up would
+# create a permanent second copy of a Tier-0 secret. That trade is only
+# acceptable while losing the volume stays unlikely.
+#
+# The original compose declared these volumes NON-external, as `caddy_data`
+# and `caddy_config`. Docker then names them by project prefix, and the
+# project name comes from the DIRECTORY NAME. Renaming ~/docker/caddy would
+# have silently produced fresh empty volumes, a brand-new root CA, and a
+# re-trust on every client - with no error at any point.
+#
+# They are now declared EXTERNAL by their real names. Compose binds them
+# absolutely, a rename cannot orphan them, and if they are ever missing the
+# stack fails loudly instead of quietly starting a new certificate authority.
+# ===========================================================================
+
+services:
+  caddy:
+    # Pinned by digest. Resolves to Caddy v2.11.4, verified on the host
+    # 2026-08-20 and unchanged since 2026-08-14 - a freeze, not an upgrade.
+    image: caddy@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+    external: true
+    name: caddy_caddy_data
+  caddy_config:
+    external: true
+    name: caddy_caddy_config

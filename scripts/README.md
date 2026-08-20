@@ -13,7 +13,7 @@ Pulls the small, irreplaceable set of configuration and data off-host to the MSI
 | | |
 |---|---|
 | Coverage | **All six lab hosts** |
-| Size | ~4.3 MB staged → ~670 KB encrypted |
+| Size | ~12 MB staged → ~1.2 MB encrypted (32 items) |
 | Schedule | Daily 09:00, Windows Task Scheduler → *Homelab Tier1 Backup* |
 | Retention | 14 runs |
 | Destination | `%USERPROFILE%\homelab-backups` — refuses to run if this is inside the git repo |
@@ -96,6 +96,22 @@ A backup that looks fine and is empty is worse than no backup: it stops you look
 
 **Why `ossec.conf` is wrapped.** Wazuh permits **multiple root-level `<ossec_config>` blocks**, and this install has two. A strict XML parse fails on a perfectly healthy file, which would mark every nightly run as failed. Wrapping the content in a synthetic root validates element structure while tolerating the multiple roots — and it still rejects truncation, verified by chopping the tail off the real file.
 
+### ⚠️ The counter that hid failures
+
+Until 2026-08-20 this script could report **success while an item failed**.
+
+```powershell
+$failCount = ($results | Where-Object { $_.Status -eq 'FAIL' }).Count
+```
+
+PowerShell 5.1 returns a **bare object** when exactly one item matches, and `.Count` on that is `$null`. So `$failCount -gt 0` evaluated `False`, the script printed *"All N items captured and encrypted"* and exited **0**.
+
+Two or more failures counted correctly. **Exactly one was invisible** — which is the worst possible arrangement, because one flaky item is the common case and a total outage is the rare one.
+
+It was latent from 2026-08-12 and surfaced only because the Pi-hole adlist query failed while the run still claimed success. Both counts are now wrapped in `@()` to force an array. **Do not remove those wrappers.**
+
+The lesson generalises past PowerShell: a backup script's own success reporting is as much a correctness surface as the data it copies, and nothing was verifying it.
+
 ---
 
 ## 6. Restore
@@ -108,7 +124,7 @@ Per-artifact steps are in the `MANIFEST.txt` inside each archive. Summary:
 | **job-finder** | Restore `jobtracker-*.sql` into a `jobtracker` database on the same PostgreSQL instance, then unpack `job-finder-source.tar.gz` to `~/n8n-stack/job-finder/` and redeploy via its `deploy.sh`. **The workflows inside n8n are build output** — that directory is the source they are generated from, and it exists nowhere else |
 | **OPNsense** | `config.xml` rebuilds the entire firewall. Read `ARCHITECTURE.md` §3.4 first — the **WAN/LAN roles are inverted** on this box |
 | **Wazuh** | Reinstall via the all-in-one installer, restore `ossec.conf` and `client.keys` to `/var/ossec/etc/`, restart the manager. `client.keys` is what avoids re-enrolling agents |
-| **Pi-hole** | Files drop back into `/etc/pihole/`, restart `pihole-FTL`. Adlists must be re-added by hand |
+| **Pi-hole** | Files drop back into `/etc/pihole/`, restart `pihole-FTL`. Adlist URLs are in `adlists.txt`; re-add them, then `pihole -g` rebuilds the blocklists from those URLs |
 | **Proxmox** | Guest configs are **reference material, not bootable images** — they rebuild the definition, not the disk contents |
 
 **Two legs have been executed: n8n (2026-08-12) and `jobtracker` (2026-08-16).** Everything else is a written procedure, which `SERVICE-TEMPLATE.md` correctly calls a hypothesis. Re-verify quarterly — **next due 2026-11-12**.
@@ -123,7 +139,7 @@ The `jobtracker` test restored from the **actual encrypted archive** into a thro
 
 - **n8n execution history** — deliberately excluded. Schema is kept, rows are not. The 60-second Telegram poll in `job-finder-approval` produces ~1,200 executions/day, which made execution data **97% of a 39 MB dump**. A restore needs workflows, credentials and settings, not a log of past runs. **This is excluded from the backup but not bounded on the host** — no `EXECUTIONS_DATA_PRUNE` variables are set, so the live database keeps growing. Note: do **not** reach for `saveDataSuccessExecution: 'none'` to solve this; it leaves zombie `running` executions accumulating instead
 - **Tier 2 (full VM images, ~127 GB)** — no storage hardware. `IaC-MIGRATION.md` argues this is what the IaC migration makes optional
-- **Pi-hole adlist URLs** — inside `gravity.db` (63 MB, mostly regenerable blocklist content). `sqlite3` is absent on the Pi and the native teleporter export needs sudo
+- **Pi-hole `gravity.db`** — 63 MB of downloaded blocklist content that `pihole -g` regenerates. The **adlist URLs** inside it *are* captured since 2026-08-20 via `pihole-FTL sqlite3`, which bundles sqlite3 (a standalone binary is absent — an earlier note here wrongly concluded the URLs were unextractable)
 - **Wazuh custom rules/decoders** — see §4
 - **Wazuh indexer and dashboard configs** — root-only, not pinned. The manager config and agent roster *are* captured
 

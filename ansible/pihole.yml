@@ -1,0 +1,138 @@
+---
+# Pi-hole — household DNS on the Raspberry Pi.
+#
+# IaC-MIGRATION.md §6, position 5. The highest-stakes conversion so far, and
+# for a reason that has nothing to do with the lab: an outage here takes DNS
+# away from people who never opted into this homelab.
+#
+#     ansible-playbook pihole.yml --check --diff
+#     ansible-playbook pihole.yml
+#
+# ===========================================================================
+# THIS PLAYBOOK DELIBERATELY DOES NOT MANAGE pihole.toml.
+#
+# That file carries the header "This file is managed by pihole-FTL", and it
+# means it — FTL rewrites the file, annotating changed keys with
+# "### CHANGED, default = ...". Templating it from Ansible would create the
+# same fight documented for OPNsense's authorized_keys (§8): Ansible would
+# revert every change made in the web UI, silently, on the next run.
+#
+# So this is a VERIFICATION playbook, not a configuration one. It asserts
+# that the things which must be true are true, and changes nothing. Writes,
+# if ever needed, belong in `pihole-FTL --config`, the supported interface
+# that goes through the process which owns the file.
+#
+# That is an honest limitation, not a gap to close later. Pi-hole belongs
+# closer to the §8 "stays manual" category than to the compose services.
+# ===========================================================================
+
+- name: Pi-hole
+  hosts: pihole
+  gather_facts: false
+
+  vars:
+    # The records the lab depends on. If one disappears, this playbook fails.
+    # When §7.8's .local -> .internal cutover happens, the new names get added
+    # here first — this list is the intent, the Pi is the implementation.
+    pihole_expected_records:
+      - "192.168.0.25 n8n.leonshomelab.local"
+      - "192.168.0.25 drill.leonshomelab.local"
+    pihole_test_public: example.com
+
+  tasks:
+
+    - name: Check pihole-FTL is running
+      ansible.builtin.command: systemctl is-active pihole-FTL
+      register: ftl_active
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Fail if pihole-FTL is not active
+      ansible.builtin.assert:
+        that: ftl_active.stdout | trim == 'active'
+        fail_msg: >-
+          pihole-FTL is '{{ ftl_active.stdout | trim }}'. Household DNS is
+          down, not just lab DNS. Fix this before anything else.
+        success_msg: pihole-FTL active
+
+    - name: Check pihole-FTL is enabled at boot
+      ansible.builtin.command: systemctl is-enabled pihole-FTL
+      register: ftl_enabled
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Warn if pihole-FTL would not survive a reboot
+      ansible.builtin.debug:
+        msg: >-
+          WARNING: pihole-FTL is '{{ ftl_enabled.stdout | trim }}', not
+          'enabled'. DNS would not come back after a power cut.
+      when: ftl_enabled.stdout | trim != 'enabled'
+
+    - name: Read local DNS records via the supported interface
+      ansible.builtin.command: pihole-FTL --config dns.hosts
+      register: dns_hosts
+      changed_when: false
+      check_mode: false
+
+    - name: Assert every expected record is present
+      ansible.builtin.assert:
+        that: item in dns_hosts.stdout
+        fail_msg: >-
+          Local DNS record missing: "{{ item }}".
+          Present: {{ dns_hosts.stdout | trim }}.
+          Something removed it — services addressed by that name are broken.
+        success_msg: 'record present: {{ item }}'
+      loop: "{{ pihole_expected_records }}"
+
+    # Configuration being correct is not the same as DNS working. This is the
+    # part a user would actually notice.
+    - name: Resolve a lab name through Pi-hole itself
+      ansible.builtin.command: dig +short +time=3 +tries=1 @127.0.0.1 n8n.leonshomelab.local
+      register: lab_lookup
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the lab name resolves to Caddy
+      ansible.builtin.assert:
+        that: lab_lookup.stdout | trim == '192.168.0.25'
+        fail_msg: >-
+          n8n.leonshomelab.local resolved to
+          '{{ lab_lookup.stdout | trim | default('nothing') }}', expected
+          192.168.0.25.
+        success_msg: lab name resolves correctly
+
+    - name: Resolve a public name (proves upstream forwarding works)
+      ansible.builtin.command: "dig +short +time=3 +tries=1 @127.0.0.1 {{ pihole_test_public }}"
+      register: pub_lookup
+      changed_when: false
+      check_mode: false
+
+    - name: Assert public resolution works
+      ansible.builtin.assert:
+        that: pub_lookup.stdout | trim | length > 0
+        fail_msg: >-
+          {{ pihole_test_public }} did not resolve. Pi-hole is answering for
+          local names but upstream forwarding is broken — every device in the
+          house has working lab DNS and no internet.
+        success_msg: public resolution works
+
+    - name: Read adlists (pihole-FTL bundles sqlite3; a standalone binary is absent)
+      ansible.builtin.command: >-
+        pihole-FTL sqlite3 /etc/pihole/gravity.db
+        "SELECT address FROM adlist WHERE enabled = 1;"
+      register: adlists
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Pi-hole — FTL {{ ftl_active.stdout | trim }}/{{ ftl_enabled.stdout | trim }},
+          {{ pihole_expected_records | length }} expected records present,
+          lab lookup {{ lab_lookup.stdout | trim }},
+          public resolution ok,
+          {{ adlists.stdout_lines | default([]) | length }} adlists enabled.
+          Nothing was changed — this playbook verifies only.

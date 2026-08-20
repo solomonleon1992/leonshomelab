@@ -331,11 +331,18 @@ Get-RemoteFile 'pihole' '/etc/pihole/pihole.toml'  (Join-Path $piDir 'pihole.tom
 Get-RemoteFile 'pihole' '/etc/pihole/dnsmasq.conf' (Join-Path $piDir 'dnsmasq.conf') 'Pi-hole dnsmasq.conf'
 Save-RemoteOutput 'pihole' 'pihole -v; echo; ls -la /etc/pihole/' (Join-Path $piDir 'pihole-state.txt') 'Pi-hole version/state'
 
-# NOT captured: gravity.db (63 MB, overwhelmingly downloaded blocklist content
-# that `pihole -g` regenerates). The adlist URLs inside it are genuinely not
-# regenerable, but extracting them needs sqlite3 - absent on the Pi - and
-# `pihole-FTL --teleporter` needs sudo to read pihole-FTL.db. Recorded in the
-# manifest as a gap rather than silently dropped.
+# Adlist URLs — the irreplaceable part of gravity.db.
+#
+# CORRECTION (2026-08-20): this script previously recorded that adlists could
+# not be extracted because "sqlite3 is absent on the Pi". That was wrong. A
+# standalone sqlite3 binary is indeed absent, but pihole-FTL BUNDLES sqlite3
+# and `pihole-FTL sqlite3` queries gravity.db directly, without sudo. The
+# capability was there the whole time; the check looked for the wrong thing.
+#
+# gravity.db itself stays excluded: 63 MB of downloaded blocklist content that
+# `pihole -g` regenerates from these URLs. The URLs are what cannot be
+# regenerated - nothing records which lists were chosen.
+Save-RemoteOutput 'pihole' 'pihole-FTL sqlite3 /etc/pihole/gravity.db \"SELECT address, enabled, comment FROM adlist ORDER BY id;\"' (Join-Path $piDir 'adlists.txt') 'Pi-hole adlist URLs'
 
 # ---------------------------------------------------------------------------
 # OPNsense - entire configuration
@@ -458,8 +465,19 @@ if (Test-Path $wzKeys) {
 # Manifest
 # ---------------------------------------------------------------------------
 $stagedBytes = (Get-ChildItem $stageDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-$okCount     = ($results | Where-Object { $_.Status -eq 'OK' }).Count
-$failCount   = ($results | Where-Object { $_.Status -eq 'FAIL' }).Count
+# @() is load-bearing on both of these.
+#
+# Without it PowerShell 5.1 returns a BARE OBJECT when exactly one item
+# matches, and .Count on that is $null. A single failure therefore produced
+# failCount = $null, "$failCount -gt 0" evaluated False, and this script
+# printed "All N items captured and encrypted" and exited 0.
+#
+# Two or more failures were counted correctly. EXACTLY ONE was invisible -
+# the worst possible arrangement, because a single flaky item is the common
+# case. Latent from 2026-08-12; found 2026-08-20 when the Pi-hole adlist
+# query failed and the run still reported success.
+$okCount     = @($results | Where-Object { $_.Status -eq 'OK' }).Count
+$failCount   = @($results | Where-Object { $_.Status -eq 'FAIL' }).Count
 
 $manifest = @"
 HOMELAB TIER 1 BACKUP
@@ -496,10 +514,12 @@ GAPS - not covered by this run
                                 from the 60s Telegram poll made it 97% of a
                                 39 MB dump. A restore needs workflows and
                                 credentials, not a log of past runs.
-  - Pi-hole adlist URLs         live in gravity.db (63 MB). Not extracted:
-                                sqlite3 is absent on the Pi and the native
-                                teleporter export needs sudo. The rest of
-                                the Pi-hole configuration IS captured.
+  - Pi-hole gravity.db          63 MB of DOWNLOADED blocklist content, which
+                                `pihole -g` regenerates. The adlist URLs
+                                inside it are NOT regenerable and ARE now
+                                captured separately (adlists.txt), via
+                                `pihole-FTL sqlite3`. Earlier runs of this
+                                script wrongly recorded these as unextractable.
   - Full VM images (Tier 2)     ~127 GB, requires storage hardware
 
 RESTORE

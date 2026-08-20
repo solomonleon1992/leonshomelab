@@ -28,7 +28,7 @@ So completeness is measured by exactly one question:
 | Caddy | ✅ Ansible playbook + Caddyfile | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not on fresh hardware |
 | Jellyfin | ✅ Ansible playbook | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not on fresh hardware |
 | `secplus-drill` | ✅ Ansible playbook | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not yet rebuilt on fresh hardware |
-| Pi-hole | ⚠️ | ❌ | ❌ |
+| Pi-hole | ✅ Ansible verification playbook | ⚠️ config is FTL-owned, not templated | ⚠️ health + records asserted 2026-08-20 |
 | Wazuh | ⚠️ | — out of scope (§8) | — |
 | OPNsense | ⚠️ | — out of scope (§8) | — |
 
@@ -227,7 +227,7 @@ Ordered by blast radius, cheapest first. The point of the early entries is to be
 | 2 | DVWA + Portainer | VM 102 | ✅ **DONE 2026-08-20** — `ansible/dvwa.yml`, `ansible/portainer.yml`. Both `changed=0` on re-run; Portainer asserts its database survived |
 | 3 | Jellyfin | VM 102 | ✅ **DONE 2026-08-20** — `ansible/jellyfin.yml`. `changed=0` on re-run; asserts config and media paths rather than creating them |
 | 4 | Caddy | VM 102 | ✅ **DONE 2026-08-20** — `ansible/caddy.yml`. `changed=0` on re-run; volumes hardened to `external`, root CA fingerprint asserted unchanged |
-| 5 | Pi-hole | Pi (.50) | Household DNS. An outage affects people who did not opt into this lab |
+| 5 | Pi-hole | Pi (.50) | ✅ **DONE 2026-08-20** — `ansible/pihole.yml`, a **verification** playbook. `pihole.toml` is FTL-owned and deliberately not templated; see §8.1 |
 | 6 | n8n stack | VM 105 | Already restore-tested, so codifying is comparatively low-risk — but it is Terry, so it goes last |
 
 ### 6.1 Standing constraints during conversion
@@ -259,6 +259,26 @@ Reconsider Terraform for existing guests only once Tier 2 backups exist (R-01 fu
 | **Metasploitable2 (VM 101)** | Distributed as a fixed appliance image. Its value is being unpatched | Note the source image and checksum |
 
 For every row above, the recovery bar is **a restore procedure that has been executed and dated** — the same standard as an IaC rebuild, met by a different mechanism.
+
+### 8.1 A third category: verify, do not own
+
+Positions 1–4 were compose services, where Ansible owns the definition outright. **Pi-hole is not that**, and neither are the §8 exclusions. `pihole.toml` carries the header *"This file is managed by pihole-FTL"*, and FTL means it — the process rewrites the file and annotates changed keys with `### CHANGED, default = ...`.
+
+Templating it would recreate the OPNsense `authorized_keys` problem exactly: Ansible silently reverting every change made through the web UI, on a schedule, with nothing logged.
+
+So `ansible/pihole.yml` **asserts and changes nothing**. It verifies FTL is active and enabled, that every expected local DNS record is present, that a lab name resolves to the right address, and that public resolution still works — the difference between *configuration looks right* and *DNS actually works*, which is what a household notices.
+
+That gives three categories rather than two:
+
+| | Ansible's role | Examples |
+|---|---|---|
+| **Own** | writes the definition, converges the service | compose services on VM 102 |
+| **Verify** | asserts required state, writes nothing | Pi-hole |
+| **Exclude** | out of scope entirely | Wazuh, OPNsense, Proxmox host, Metasploitable2 |
+
+Verification playbooks are worth writing precisely because they are cheap and cannot break anything. The Pi-hole one was tested by feeding it a deliberately absent record; it failed, which is the only way to know an assertion is not passing vacuously.
+
+**A verification playbook is not a lesser conversion.** For a service that owns its own configuration, it is the correct one — and the expected-records list is where the §7.8 `.internal` names get added first, making the intent reviewable before the change is made.
 
 **Wazuh now meets the data half of that bar and not the tested half.** Capturing `client.keys` is what makes restore-without-re-enrollment possible, which is the whole reason this table lets Wazuh out of IaC in the first place — but the procedure has been written, not run. By this document's own standard (§9.1, criterion 5) that makes it a hypothesis. The archive carries live agent credentials as the price of that capability; the trade is recorded at `scripts/README.md` §2.
 
@@ -323,3 +343,4 @@ An honest plan accounts for the harm it can do.
 | 2026-08-20 | **§6 position 2 done — DVWA and Portainer.** Both converged and idempotent (`changed=0`). The repo compose files became the deployed source, and doing so exposed that they had **already drifted** from the host copies — comments added after the 2026-08-14 deployment. Harmless this time, verified comments-only before overwriting, but it is exactly the divergence Ansible exists to stop. Portainer's playbook carries two safeguards worth reusing: it **asserts the database survived** via the admin-check endpoint (204 = admin exists, 404 = empty), because `portainer.db`'s checksum changes on every restart and is useless as a retention test; and it **refuses to create the data volume** if missing, since an auto-created empty volume produces a healthy-looking Portainer with everything gone. |
 | 2026-08-20 | **§6 position 3 done — Jellyfin.** `changed=0` on re-run; `version: "3"` dropped as obsolete; digest matched 2026-08-14 so the pin froze 10.11.6 rather than moving it. This conversion is where the "assert, do not create" pattern earned its own section: `/mnt/media` and `config/` are both **checked and never created**, because a plain directory standing in for an unmounted disk yields a silently empty library, and a missing config directory yields a first-run wizard on a server that was already configured. Both look like health. **`/mnt/media` is in fact empty** — reported by the playbook on every run rather than passed over. Third backup gap found by conversion: Jellyfin's config (users, watch history) was not in Tier 1 while its compose file was. The pattern across positions 1–3 is consistent — **the compose file was backed up, the state it points at was not.** |
 | 2026-08-20 | **§6 position 4 done — Caddy**, the first conversion with a genuinely expensive failure mode. `changed=0` on re-run; Caddyfile and compose both deployed from the repository. **The volumes were the point.** Declared non-external, their real names derived from the project name and therefore from the directory name, so a rename would have silently produced a new root CA and a re-trust on every client. Now `external: true` under absolute names — proven by resolving them from a scratch directory whose project name differed. The playbook **asserts the root CA fingerprint is unchanged before and after**, because a regenerated CA looks exactly like success: leaf certs issue, HTTPS serves, 200 returns, and every client rejects it. Also surfaced that **VM 102 resolves via 8.8.8.8 and cannot resolve lab names** (`ARCHITECTURE.md` §5.2), so the HTTPS check forces SNI to loopback instead of trusting DNS. Check mode caught two defects before either run — read-only verification tasks skip under `--check`, so they now carry `check_mode: false`; a dry run that cannot tell you whether the service is currently healthy is worth less than one that can. |
+| 2026-08-20 | **§6 position 5 done — Pi-hole**, and it introduced a third category (§8.1). `pihole.toml` is owned by pihole-FTL, so `ansible/pihole.yml` **verifies and changes nothing**: FTL active and enabled, expected local DNS records present, a lab name resolving to the right address, and public resolution working. The assertion was proven non-vacuous by feeding it a record that does not exist and watching it fail. **Two corrections.** `sqlite3` is bundled inside `pihole-FTL`, so the adlist URLs — previously recorded as unextractable — are now in Tier 1 (32 items). And the backup script itself **could report success while an item failed**: PowerShell 5.1 returns a bare object when exactly one item matches, so `.Count` was `$null` and `-gt 0` was `False`. Latent since 2026-08-12, surfaced only because the adlist query failed while the run still claimed success. A backup script's own success reporting turns out to be as much a correctness surface as the data it copies, and nothing was checking it. |

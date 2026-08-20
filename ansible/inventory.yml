@@ -1,0 +1,72 @@
+# Ansible inventory — leonshomelab
+#
+# Host keys are the EXACT Proxmox guest names from ARCHITECTURE.md §4, so that
+# automation and documentation refer to the same identifiers. `ansible_host`
+# carries the address; see §2.1 for the address plan.
+#
+# This file contains no secrets — only RFC1918 addresses and usernames already
+# published in ARCHITECTURE.md — so the real inventory is committed rather than
+# an `.example` placeholder. A sanitized inventory would defeat the point: the
+# measure of this project is whether the lab can be rebuilt from the repository
+# alone (IaC-MIGRATION.md §1), and a placeholder inventory cannot be.
+#
+# Authentication is a dedicated, passphrase-protected key held only in WSL at
+# ~/.ssh/ansible_ed25519. It is never committed. See IaC-MIGRATION.md §3.2 and
+# ARCHITECTURE.md R-15.
+
+all:
+  vars:
+    ansible_ssh_private_key_file: ~/.ssh/ansible_ed25519
+    # Fail rather than hang if a host is unreachable or its key is unknown.
+    ansible_ssh_common_args: '-o BatchMode=yes -o ConnectTimeout=10'
+
+  children:
+
+    hypervisor:
+      hosts:
+        pve:
+          ansible_host: 192.168.0.2
+          ansible_user: root
+
+    guests:
+      hosts:
+        Docker-Host:
+          ansible_host: 192.168.0.25
+          ansible_user: leon
+        n8n-ai-stack:
+          ansible_host: 192.168.0.28
+          ansible_user: leon
+        Wazuh-SIEM:
+          ansible_host: 192.168.0.27
+          ansible_user: leon
+        OPNsense:
+          ansible_host: 192.168.0.22
+          ansible_user: root
+          # FreeBSD, not Linux. Python is not at /usr/bin/python3 here, and
+          # root's login shell is tcsh — force a POSIX shell for module runs.
+          ansible_python_interpreter: /usr/local/bin/python3
+          ansible_shell_executable: /bin/sh
+
+    offhypervisor:
+      hosts:
+        pihole:
+          ansible_host: 192.168.0.50
+          ansible_user: leon
+
+# ---------------------------------------------------------------------------
+# DELIBERATELY ABSENT
+#
+#   Metasploitable2 (VM 101, 192.168.0.24)
+#       Stopped, and intentionally unpatched. It has no SSH key access and
+#       should not be given one — it exists to be attacked (ARCHITECTURE.md
+#       R-02). Its recovery path is the appliance image, not configuration.
+#
+#   twingate-connector (CT 103, 192.168.0.26)
+#       No SSH key access configured. The connector is a single outbound
+#       daemon installed from Twingate's own packaging; its configuration is
+#       the access token consumed at install time, which is not recoverable
+#       from the host anyway.
+#
+# Neither is an oversight. Adding a host here without a reason to manage it
+# just widens the blast radius of a bad playbook.
+# ---------------------------------------------------------------------------

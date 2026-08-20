@@ -176,7 +176,31 @@ Pinning is only complete when paired with a deliberate update cadence: monthly, 
 
 ---
 
-## 5. Phase 1 — Control Node and Inventory
+## 5. Phase 1 — Control Node and Inventory ✅ COMPLETE 2026-08-20
+
+**Exit criterion met: 6/6 hosts answered a read-only fact-gathering run, exit code 0, nothing changed.**
+
+| Host | Reported |
+|---|---|
+| `pve` | Debian 13.4, kernel 6.17.2-1-pve, 32006 MB |
+| `Docker-Host` | Ubuntu 22.04, 2 vcpu, 3911 MB |
+| `n8n-ai-stack` | Ubuntu 22.04, 4 vcpu, 7937 MB |
+| `Wazuh-SIEM` | Ubuntu 22.04, 4 vcpu, 7937 MB |
+| `OPNsense` | FreeBSD 14.3-RELEASE-p8, 1951 MB |
+| `pihole` | Debian 13.4, kernel 6.12.75+rpt-rpi-v8, 3796 MB |
+
+Every figure matches `ARCHITECTURE.md` §4 — the first time that document has been corroborated by something other than hand-run commands.
+
+**Built:** WSL2 + Ubuntu 26.04 LTS on the Katana, Ansible 13.1.0 (`ansible-core` 2.20.1), a dedicated **passphrase-protected** ed25519 key (`SHA256:QOuFJwWk…`), its public half on all six hosts, and `ansible/inventory.yml` + `ansible/ansible.cfg` in this repository.
+
+**Four things that cost time and are worth not rediscovering:**
+
+1. **`wsl --install` is two stages.** The first run enables the Windows features and the reboot consumes it; the distro needs a second `wsl --install -d Ubuntu`. Use `--no-launch` to avoid the interactive first-run prompt blocking automation.
+2. **Ubuntu's `.bashrc` returns early for non-interactive shells.** Agent configuration placed there is invisible to `bash -lc`, which is how automation invokes WSL. It belongs in `.profile`.
+3. **OPNsense root's login shell is tcsh.** A successful key test returns *"Illegal variable name"* rather than a shell — that is the command syntax failing, **not** authentication. A genuine auth failure says *"Permission denied (publickey)"*. Don't confuse them.
+4. **Ansible ignores `ansible.cfg` in a world-writable directory**, and WSL mounts `/mnt/c` world-writable — so the config cannot live in this repo and be used. `ansible/ansible.cfg` here is a recovery copy; the operative file is `~/.ansible.cfg` in WSL.
+
+### Original plan
 
 1. `wsl --install` on the Katana; reboot; install Ansible in the distro.
 2. Generate the dedicated, **passphrase-protected** Ansible key (§3.2) and distribute the public key to all managed hosts.

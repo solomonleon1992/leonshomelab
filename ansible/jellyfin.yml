@@ -1,0 +1,122 @@
+---
+# Jellyfin — media server on VM 102.
+#
+# IaC-MIGRATION.md §6, position 3. More complex than positions 1-2:
+# network_mode: host, three bind mounts, and a config directory holding state
+# that a library rescan cannot rebuild.
+#
+#     ansible-playbook jellyfin.yml --check --diff
+#     ansible-playbook jellyfin.yml
+#
+# Failure here means no TV, not data loss — provided this playbook never owns
+# ./config, which is why it does not.
+
+- name: Jellyfin
+  hosts: Docker-Host
+  gather_facts: false
+
+  vars:
+    jellyfin_dir: /home/leon/docker/jellyfin
+    jellyfin_media: /mnt/media
+    jellyfin_port: 8096
+
+  tasks:
+
+    - name: Verify docker is present before changing anything
+      ansible.builtin.command: docker --version
+      changed_when: false
+      check_mode: false
+
+    - name: Ensure stack directory exists
+      ansible.builtin.file:
+        path: "{{ jellyfin_dir }}"
+        state: directory
+        mode: "0775"
+
+    # config/ and cache/ are created and owned by the container as root.
+    # This playbook deliberately does NOT manage them - not their contents,
+    # not their ownership, not their mode.
+    #
+    # ./config holds users, library metadata and watch history. A rescan
+    # rebuilds metadata; nothing rebuilds who watched what. Handing a playbook
+    # ownership of a root-owned state directory invites it to "correct"
+    # permissions the container set on purpose.
+    - name: Check config directory exists (contents and ownership NOT managed)
+      ansible.builtin.stat:
+        path: "{{ jellyfin_dir }}/config"
+      register: config_dir
+
+    - name: Fail if the config directory is missing
+      ansible.builtin.assert:
+        that: config_dir.stat.exists and config_dir.stat.isdir
+        fail_msg: >-
+          {{ jellyfin_dir }}/config does not exist. Starting Jellyfin now would
+          create an empty one and present a first-run setup wizard, as though
+          the server had never been configured. Restore it before continuing.
+        success_msg: config directory present — users and watch history preserved
+
+    # Asserted, never created. If /mnt/media is ever a separate disk, creating
+    # it as a plain directory would mask a failed mount: the bind would succeed,
+    # Jellyfin would start cleanly, and the library would simply be empty.
+    - name: Check the media path exists
+      ansible.builtin.stat:
+        path: "{{ jellyfin_media }}"
+      register: media_dir
+
+    - name: Fail if the media path is missing
+      ansible.builtin.assert:
+        that: media_dir.stat.exists
+        fail_msg: >-
+          {{ jellyfin_media }} does not exist. This playbook will NOT create it,
+          because a plain directory standing in for an unmounted disk yields a
+          silently empty library instead of an error. Mount the media storage
+          first.
+        success_msg: "media path present"
+
+    - name: Count media entries (informational)
+      ansible.builtin.command: "ls -1 {{ jellyfin_media }}"
+      register: media_ls
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Warn if the media library is empty
+      ansible.builtin.debug:
+        msg: >-
+          NOTE: {{ jellyfin_media }} is EMPTY — Jellyfin will serve nothing.
+          This is not a failure of this playbook. Either media has not been
+          added yet, or a mount that used to be here is gone.
+      when: media_ls.stdout | default('') | trim == ''
+
+    - name: Deploy compose file from the repository
+      ansible.builtin.copy:
+        src: ../docker/jellyfin.example.yml
+        dest: "{{ jellyfin_dir }}/docker-compose.yml"
+        mode: "0664"
+      register: compose_file
+
+    - name: Bring the stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ jellyfin_dir }}"
+        state: present
+      register: compose_up
+
+    - name: Verify Jellyfin answers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ jellyfin_port }}/System/Info/Public"
+        status_code: 200
+        return_content: true
+      retries: 6
+      delay: 5
+      register: http_check
+      until: http_check.status == 200
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Jellyfin {{ http_check.json.Version | default('?') }} —
+          HTTP {{ http_check.status | default('not probed (check mode)') }},
+          media entries {{ media_ls.stdout_lines | default([]) | length }},
+          compose {{ 'rewritten' if compose_file.changed else 'unchanged' }},
+          stack {{ 'converged' if compose_up.changed else 'already correct' }}

@@ -256,6 +256,28 @@ $dockerDir = Join-Path $stageDir 'vm102-docker'
 Get-RemoteFile 'vm102' '~/docker/caddy/Caddyfile'             (Join-Path $dockerDir 'Caddyfile')                   'Caddyfile'
 Get-RemoteFile 'vm102' '~/docker/caddy/docker-compose.yml'    (Join-Path $dockerDir 'caddy-docker-compose.yml')    'caddy compose'
 Get-RemoteFile 'vm102' '~/docker/jellyfin/docker-compose.yml' (Join-Path $dockerDir 'jellyfin-docker-compose.yml') 'jellyfin compose'
+
+# Jellyfin CONFIG, not just its compose file.
+#
+# ~/docker/jellyfin/config holds users, library metadata and watch history.
+# A library rescan rebuilds metadata; nothing rebuilds who watched what.
+# 664 KB on disk, ~28 KB compressed, 51 files - trivially cheap to carry, and
+# it was absent from Tier 1 until 2026-08-20 while the compose file beside it
+# (now regenerable from ansible/jellyfin.yml) was captured.
+#
+# Readable by the backup account without sudo, verified 2026-08-20 with zero
+# permission errors, despite the directory being root-owned - the container
+# creates it world-readable.
+#
+# ./cache is deliberately NOT captured: regenerable by definition.
+$jfRemote = "/tmp/jellyfin-config-$stamp.tar.gz"
+& ssh -o BatchMode=yes -o ConnectTimeout=10 vm102 "tar czf $jfRemote -C ~/docker/jellyfin config"
+if ($LASTEXITCODE -eq 0) {
+    Get-RemoteFile 'vm102' $jfRemote (Join-Path $dockerDir 'jellyfin-config.tar.gz') 'jellyfin config (users, watch history)'
+    & ssh -o BatchMode=yes -o ConnectTimeout=10 vm102 "rm -f $jfRemote" | Out-Null
+} else {
+    Add-Result 'jellyfin config' 'FAIL' "tar failed (ssh exit $LASTEXITCODE)"
+}
 Get-RemoteFile 'vm102' '~/secplus-drill/docker-compose.yml'   (Join-Path $dockerDir 'secplus-drill-compose.yml')   'secplus-drill compose'
 
 # secplus-drill CONTENT, not just its compose file.

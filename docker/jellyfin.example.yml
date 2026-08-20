@@ -1,0 +1,47 @@
+# Jellyfin — media server on VM 102
+#
+# Deployed by ansible/jellyfin.yml to ~/docker/jellyfin/docker-compose.yml.
+# This file is the source of truth; the host copy is generated.
+#
+# No secrets: Jellyfin's users and API keys live in ./config, never here.
+
+services:
+  jellyfin:
+    # Pinned by digest. Resolves to Jellyfin 10.11.6, verified on the host
+    # 2026-08-20 — unchanged since it was first recorded on 2026-08-14, so
+    # this pin is a freeze rather than a version change (R-09).
+    image: jellyfin/jellyfin@sha256:333b647716631443a43c7fabac4b0c46b4e2f036bad19547e00958f10f721b85
+    container_name: jellyfin
+    restart: unless-stopped
+
+    # network_mode: host — Jellyfin binds the host's interfaces DIRECTLY.
+    #
+    # There is no `ports:` block and there cannot be one; Docker reports no
+    # mappings for this container by design. 8096 (HTTP) and the DLNA/discovery
+    # ports are open on the flat, unfiltered segment (ARCHITECTURE.md §3.3),
+    # reachable by every host on 192.168.0.0/24 and every Twingate client while
+    # the full-subnet grant stands (R-07).
+    #
+    # This is how Jellyfin's DLNA and client auto-discovery work. Switching to
+    # bridge networking breaks them. Left as-is deliberately.
+    network_mode: host
+
+    volumes:
+      # ./config holds users, library metadata and watch history. Small (664 KB
+      # as of 2026-08-20) but genuinely irreplaceable — a library rescan
+      # rebuilds metadata, not who watched what. Ansible does NOT manage this
+      # directory's contents; see the playbook.
+      - ./config:/config
+
+      # Regenerable. Safe to delete if it ever grows.
+      - ./cache:/cache
+
+      # The media library itself. NOTE: as of 2026-08-20 /mnt/media is an
+      # EMPTY plain directory, not a mountpoint — Jellyfin is serving nothing.
+      # If media is ever placed on a separate disk, mount it here BEFORE
+      # starting the container; a bind mount over a missing mount silently
+      # yields an empty library rather than an error.
+      - /mnt/media:/media
+
+# `version:` is deliberately absent. It is obsolete under Compose v2 and only
+# produces a warning; the original host file carried `version: "3"`.

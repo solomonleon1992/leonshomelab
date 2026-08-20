@@ -1,0 +1,113 @@
+---
+# secplus-drill — static SY0-701 practice drill served by nginx on VM 102.
+#
+# FIRST SERVICE CONVERTED TO ANSIBLE (IaC-MIGRATION.md §6, position 1).
+# Chosen deliberately because it is the cheapest possible thing to get wrong:
+# one container, one port, no database, no credentials, zero dependents.
+#
+# Run check-mode first, always:
+#     ansible-playbook secplus-drill.yml --check --diff
+#     ansible-playbook secplus-drill.yml
+#
+# Idempotency is the real test. A second consecutive run must report
+# "changed=0". If it does not, this playbook is describing a moving target
+# rather than a desired state.
+
+- name: secplus-drill
+  hosts: Docker-Host
+  gather_facts: false
+
+  vars:
+    secplus_dir: /home/leon/secplus-drill
+    secplus_port: 8088
+    # Pinned by digest, not by tag. `nginx:alpine` floats and a repository
+    # that says `:alpine` cannot state what it builds (R-09). Resolves to
+    # nginx 1.31.2, verified on the host 2026-08-16.
+    secplus_image: >-
+      nginx@sha256:54f2a904c251d5a34adf545a72d32515a15e08418dae0266e23be2e18c66fefa
+
+  tasks:
+
+    - name: Verify docker is present before changing anything
+      ansible.builtin.command: docker --version
+      changed_when: false
+      # Read-only, so it runs even in check mode. A precondition that is
+      # skipped during a dry run is not a precondition.
+      check_mode: false
+      register: docker_check
+
+    - name: Ensure stack directory exists
+      ansible.builtin.file:
+        path: "{{ secplus_dir }}"
+        state: directory
+        mode: "0775"
+
+    # The directory is managed; its CONTENTS deliberately are not.
+    #
+    # index.html is 44 KB of hand-written study material that exists only on
+    # this host. If this playbook managed the directory's contents and the
+    # source were ever missing or empty, a single run would delete it. A first
+    # conversion is not the place to hand a playbook that power.
+    #
+    # Content management is intentionally deferred until index.html has a
+    # second home — see the "not yet managed" note at the bottom of this file.
+    - name: Ensure html directory exists (contents NOT managed — see note)
+      ansible.builtin.file:
+        path: "{{ secplus_dir }}/html"
+        state: directory
+        mode: "0775"
+
+    - name: Deploy compose file
+      ansible.builtin.copy:
+        dest: "{{ secplus_dir }}/docker-compose.yml"
+        mode: "0664"
+        content: |
+          # MANAGED BY ANSIBLE — ansible/secplus-drill.yml
+          # Local edits will be overwritten on the next run.
+          services:
+            secplus-drill:
+              image: {{ secplus_image }}
+              container_name: secplus-drill
+              restart: unless-stopped
+              ports:
+                - "{{ secplus_port }}:80"
+              volumes:
+                - ./html:/usr/share/nginx/html:ro
+      register: compose_file
+
+    - name: Bring the stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ secplus_dir }}"
+        state: present
+      register: compose_up
+
+    - name: Verify the service actually answers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ secplus_port }}/"
+        status_code: 200
+        return_content: false
+      retries: 5
+      delay: 3
+      register: http_check
+      until: http_check.status == 200
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          secplus-drill on {{ inventory_hostname }} — HTTP {{ http_check.status | default('not probed (check mode)') }},
+          compose {{ 'rewritten' if compose_file.changed else 'unchanged' }},
+          stack {{ 'converged' if compose_up.changed else 'already correct' }}
+
+# ---------------------------------------------------------------------------
+# NOT YET MANAGED — html/index.html
+#
+# The drill content is a single 44 KB hand-written file living only on VM 102.
+# It is not in this repository and, until 2026-08-20, was not in the Tier 1
+# backup either — the backup captured the compose file beside it but not the
+# content it serves, which is the part that took effort to make.
+#
+# Until it has a second home, this playbook can recreate the SERVICE but not
+# the thing the service is for. That is the honest state, and it is why this
+# service does not yet satisfy criterion 6 of IaC-MIGRATION.md §9.1.
+# ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ So completeness is measured by exactly one question:
 
 > **How much of this lab could be rebuilt from the repository alone?**
 
-### 1.1 Current score — 2026-08-14
+### 1.1 Current score — 2026-08-20
 
 | Service | Documented | Reproducible | Rebuild tested |
 |---|---|---|---|
@@ -27,12 +27,12 @@ So completeness is measured by exactly one question:
 | Portainer | ⚠️ compose only, no README | ✅ digest-pinned | ❌ — redeployed in place 2026-08-14, not on fresh hardware |
 | Caddy | ⚠️ Caddyfile recorded | ❌ | ❌ |
 | Jellyfin | ⚠️ | ❌ | ❌ |
-| `secplus-drill` | ⚠️ | ❌ | ❌ |
+| `secplus-drill` | ✅ Ansible playbook | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not yet rebuilt on fresh hardware |
 | Pi-hole | ⚠️ | ❌ | ❌ |
 | Wazuh | ⚠️ | — out of scope (§8) | — |
 | OPNsense | ⚠️ | — out of scope (§8) | — |
 
-**Honest score as of 2026-08-14: three services are reproducible on paper, none has passed the rebuild test.**
+**Honest score as of 2026-08-20: four services are reproducible on paper, one is managed by Ansible, none has passed the rebuild test.**
 
 Three compose files now pin every image by digest, so the repository can finally state what it builds — that closes the *reproducibility* half. The *rebuild* half is untouched. DVWA and Portainer were recreated from their repo files, which proves those files are accurate, but it happened **on the existing host with its existing state**. That is not the same as reconstituting a service from the repository alone on hardware that need not match.
 
@@ -223,7 +223,7 @@ Ordered by blast radius, cheapest first. The point of the early entries is to be
 
 | # | Service | Host | Why in this position |
 |---|---|---|---|
-| 1 | `secplus-drill` | VM 102 | `nginx:alpine`, one port, zero dependents. Proves the whole pattern where failure costs nothing |
+| 1 | `secplus-drill` | VM 102 | ✅ **DONE 2026-08-20** — `ansible/secplus-drill.yml`. Converged, then re-run: `changed=0`
 | 2 | DVWA + Portainer | VM 102 | Closes R-13; both need compose files regardless. DVWA has no dependents |
 | 3 | Jellyfin | VM 102 | `network_mode: host` and media paths add real complexity. Failure means no TV, not data loss |
 | 4 | Caddy | VM 102 | Holds the internal root CA volume and fronts n8n. **`caddy_caddy_data` must survive** — see §6.1 |
@@ -319,3 +319,4 @@ An honest plan accounts for the harm it can do.
 | 2026-08-14 | **Phase 0 SSH blocker closed — and the original assessment was wrong.** §4.1 had ranked SSH key access as "the highest-leverage item in the entire roadmap," blocking four workstreams. Hand-verification showed **Pi-hole key auth already worked** (never blocked; the obstacle was assumed and never tested) and **Wazuh needed only a key pushed over SSH**, no console. Only **OPNsense** was genuinely blocked, and `ARCHITECTURE.md`'s recorded cause for that was also wrong — the GUI is not LAN-bound; "Block private networks" on WAN was dropping all `192.168.0.0/24` traffic above every user rule. Corrected in `ARCHITECTURE.md` §3.4, which also documents the **WAN/LAN inversion** that makes a management-permitting WAN rule correct here. Six SSH aliases recorded for Phase 1 inventory. **New constraint:** OPNsense regenerates `authorized_keys` from `config.xml` on every GUI apply, so `ansible.posix.authorized_key` succeeds and is silently reverted — §5 step 2 and §8 updated, reinforcing OPNsense's exclusion from IaC. Lesson recorded in §4.1: **an unverified blocker is a hypothesis**, the same standard this document already applied to restores and reconstructions but not to its own blockers. |
 | 2026-08-14 | **§4.3 closed (R-13)** — DVWA and Portainer reconstructed and redeployed from the exact repo files; Portainer's data verified retained. **§1.1 scorecard corrected**: three services are now reproducible on paper (digest-pinned compose), where the table previously read zero, but **none has passed the rebuild test** — redeploying on the existing host is not reconstitution on fresh hardware. Production still runs floating tags regardless (R-09). |
 | 2026-08-14 | Roadmap created. Ansible-first decision recorded (§2) with Terraform deferred to greenfield (§7). Control node set to MSI Katana + WSL (§3); WSL confirmed not installed. **R-09 promoted to High / Phase-0 prerequisite** — `:latest` makes the repository unable to reproduce any service, including n8n (§4.2). **R-15 identified** — Ansible SSH key concentration on an unencrypted laptop (§3.2). Scope boundary set: Wazuh, OPNsense, Proxmox host, and Metasploitable2 excluded from IaC with a tested-restore bar instead (§8). Rebuild-vs-restore distinction defined; honest current score is zero reproducible services (§1.1). |
+| 2026-08-20 | **Phase 2 begins — `secplus-drill` converted** (§6, position 1). `ansible/secplus-drill.yml`: converged, then re-run clean at **`changed=0`**. The compose file is generated with `nginx` pinned by digest. **Check mode earned its keep on the first run**, catching a bug that would have broken every dry run — the HTTP check skips under `--check`, so the report task referenced `http_check.status` on an empty dict. The docker precondition now runs with `check_mode: false`, because a precondition that is skipped during a dry run is not a precondition. Conversion surfaced an unrelated data-loss gap: `html/index.html`, 44 KB of hand-written study material, was absent from Tier 1 while the compose file beside it was captured — the replaceable half was backed up and the irreplaceable half was not. Now captured (30 items). **The playbook manages the html directory but not its contents**, deliberately: a playbook that owns a directory can empty it, and the content has no second home yet. Until it does, this service can be rebuilt but the thing it serves cannot — which is why §1.1 still shows ⚠️ rather than a rebuild date. |

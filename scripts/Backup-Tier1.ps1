@@ -258,6 +258,22 @@ Get-RemoteFile 'vm102' '~/docker/caddy/docker-compose.yml'    (Join-Path $docker
 Get-RemoteFile 'vm102' '~/docker/jellyfin/docker-compose.yml' (Join-Path $dockerDir 'jellyfin-docker-compose.yml') 'jellyfin compose'
 Get-RemoteFile 'vm102' '~/secplus-drill/docker-compose.yml'   (Join-Path $dockerDir 'secplus-drill-compose.yml')   'secplus-drill compose'
 
+# secplus-drill CONTENT, not just its compose file.
+#
+# ~/secplus-drill/html/index.html is 44 KB of hand-written SY0-701 study
+# material that existed in exactly one place until 2026-08-20. The backup was
+# capturing the compose file beside it - eight lines, reproducible from the
+# Ansible playbook - while missing the thing the service exists to serve.
+# The compose file was the replaceable half.
+$sdRemote = "/tmp/secplus-html-$stamp.tar.gz"
+& ssh -o BatchMode=yes -o ConnectTimeout=10 vm102 "tar czf $sdRemote -C ~/secplus-drill html"
+if ($LASTEXITCODE -eq 0) {
+    Get-RemoteFile 'vm102' $sdRemote (Join-Path $dockerDir 'secplus-drill-html.tar.gz') 'secplus-drill html content'
+    & ssh -o BatchMode=yes -o ConnectTimeout=10 vm102 "rm -f $sdRemote" | Out-Null
+} else {
+    Add-Result 'secplus-drill html content' 'FAIL' "tar failed (ssh exit $LASTEXITCODE)"
+}
+
 # Caddy internal root CA *certificate* (public, safe). The root KEY is
 # deliberately NOT backed up - see ARCHITECTURE.md 7.9.
 Get-RemoteFile 'vm102' '~/caddy-root-ca.crt' (Join-Path $dockerDir 'caddy-root-ca.crt') 'Caddy root CA cert (public)'

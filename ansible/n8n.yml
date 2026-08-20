@@ -80,14 +80,6 @@
       changed_when: false
       check_mode: false
 
-    - name: Back up the compose file before editing it
-      ansible.builtin.copy:
-        src: "{{ n8n_dir }}/docker-compose.yml"
-        dest: "{{ n8n_dir }}/docker-compose.yml.ansible-bak"
-        remote_src: true
-        force: false
-        mode: "0600"
-
     # ------------------------------------------------------------------
     # TWO INDEPENDENT GUARDS, because this task edits a file that holds
     # N8N_ENCRYPTION_KEY and a live job search runs on the result.
@@ -171,8 +163,10 @@
         fail_msg: >-
           STATE CHANGED. Before: {{ state_before.stdout }}.
           After: {{ state_after.stdout }}. A volume was probably not bound.
-          Restore docker-compose.yml.ansible-bak and bring the stack up again
-          before touching anything else.
+          Restore the compose file from the newest Tier 1 archive, then bring
+          the stack up again before touching anything else. No local backup is
+          kept: Tier 1 holds this file encrypted, off-host, with 14 versions,
+          which is strictly better than a plaintext copy on the same disk.
         success_msg: "state identical: {{ state_after.stdout }}"
 
     # The only check that proves N8N_ENCRYPTION_KEY still works. Workflows

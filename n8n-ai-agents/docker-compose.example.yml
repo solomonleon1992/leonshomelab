@@ -56,11 +56,27 @@ services:
       # --- addressing ---
       - N8N_HOST=${N8N_HOST}
       - N8N_PORT=5678
-      - N8N_PROTOCOL=http
+      - N8N_PROTOCOL=https         # corrected 2026-08-20 — live value, was `http` here
       - N8N_PROXY_HOPS=1           # one hop: Caddy on VM 102
-      - N8N_SECURE_COOKIE=false    # likely removable now that Caddy serves HTTPS
+      - N8N_SECURE_COOKIE=true     # corrected 2026-08-20 — live value, was `false` here
       - WEBHOOK_URL=${WEBHOOK_URL} # deprecation review pending
       # - N8N_EDITOR_BASE_URL=     # not set in production; review with WEBHOOK_URL
+
+      # --- execution retention (added to the live stack 2026-08-20) ----------
+      # Without these the database grows without bound. `job-finder-approval`
+      # polls Telegram every 60s, which took the n8n database from 15 MB to
+      # 85 MB and 7,146 executions in five days.
+      #
+      # MAX_COUNT is what actually bites here: at ~1,400 executions/day it
+      # caps history at roughly 3.5 days, well inside the 7-day MAX_AGE.
+      #
+      # Do NOT reach for EXECUTIONS_DATA_SAVE_ON_SUCCESS=none (or the
+      # per-workflow `saveDataSuccessExecution: 'none'`) to solve this - it
+      # leaves zombie `running` executions accumulating instead of cleaning up.
+      # Verified the hard way; see the resume project's n8n-gotchas memory.
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168            # hours (7 days)
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000
     volumes:
       - n8n_data:/home/node/.n8n
 

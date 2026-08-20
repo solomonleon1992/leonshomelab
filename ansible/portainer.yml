@@ -1,0 +1,115 @@
+---
+# Portainer CE — container management UI on VM 102.
+#
+# IaC-MIGRATION.md §6, position 2.
+#
+#     ansible-playbook portainer.yml --check --diff
+#     ansible-playbook portainer.yml
+#
+# !! PORTAINER CREDENTIALS ARE HOST-ROOT CREDENTIALS.
+# It bind-mounts /var/run/docker.sock read-write, which is how it manages
+# containers and also means anyone with Portainer access controls every
+# container on VM 102 — including Caddy and its internal root CA private key
+# (ARCHITECTURE.md §5.1, R-06). That is by design, not a misconfiguration,
+# but it is why this playbook does not widen anything.
+#
+# UNLIKE DVWA, THIS SERVICE HAS STATE. `portainer_data` holds every user,
+# setting and endpoint. The compose file declares it `external: true` so that
+# compose binds the EXISTING volume rather than creating a project-prefixed
+# `portainer_portainer_data` and starting with an empty database.
+
+- name: Portainer
+  hosts: Docker-Host
+  gather_facts: false
+
+  vars:
+    portainer_dir: /home/leon/docker/portainer
+    portainer_port: 9443
+
+  tasks:
+
+    - name: Verify docker is present before changing anything
+      ansible.builtin.command: docker --version
+      changed_when: false
+      check_mode: false
+
+    # Deliberately does NOT create the volume if it is missing.
+    #
+    # On an existing host a missing volume means something is wrong and the
+    # run should stop. On a fresh host it means the data has not been restored
+    # yet, and silently creating an empty volume would bring Portainer up
+    # looking healthy with every user and endpoint gone — the failure mode
+    # that is hardest to notice and most expensive to discover late.
+    - name: Check the portainer_data volume exists
+      ansible.builtin.command: docker volume inspect portainer_data
+      register: vol_check
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Fail clearly if the data volume is absent
+      ansible.builtin.assert:
+        that: vol_check.rc == 0
+        fail_msg: >-
+          portainer_data does not exist on {{ inventory_hostname }}.
+          This playbook will NOT create it, because an empty volume starts
+          Portainer with no users, settings or endpoints while appearing
+          healthy. Restore the volume first, or create it deliberately with
+          `docker volume create portainer_data` if a fresh install is what
+          you actually want.
+        success_msg: portainer_data present — existing state will be preserved
+
+    - name: Deploy compose file from the repository
+      ansible.builtin.copy:
+        src: ../docker/portainer.example.yml
+        dest: "{{ portainer_dir }}/docker-compose.yml"
+        mode: "0644"
+      register: compose_file
+
+    - name: Bring the stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ portainer_dir }}"
+        state: present
+      register: compose_up
+
+    - name: Verify Portainer answers
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ portainer_port }}/"
+        validate_certs: false
+        status_code: 200
+      retries: 5
+      delay: 3
+      register: http_check
+      until: http_check.status == 200
+      changed_when: false
+
+    # A 200 only proves the web server is up. This proves the DATABASE
+    # survived: 204 means an admin user exists, 404 means a fresh empty
+    # database. Learned on 2026-08-16 — portainer.db's checksum changes on
+    # every restart because BoltDB rewrites its meta page, so a file hash is
+    # the wrong retention test and this endpoint is the right one.
+    - name: Verify the database survived (204 = admin exists, 404 = empty)
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:{{ portainer_port }}/api/users/admin/check"
+        validate_certs: false
+        status_code: [204, 404]
+      register: admin_check
+      changed_when: false
+
+    - name: Fail if Portainer came up with an empty database
+      ansible.builtin.assert:
+        that: admin_check.status == 204
+        fail_msg: >-
+          Portainer is running but has NO admin user — the database is empty.
+          The volume was probably not bound. Check that portainer_data exists
+          and that the compose file still declares it external.
+        success_msg: admin user present — database retained
+      when: admin_check.status is defined
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          Portainer — HTTPS {{ http_check.status | default('not probed (check mode)') }},
+          database {{ 'retained' if admin_check.status | default(0) == 204 else 'NOT VERIFIED' }},
+          compose {{ 'rewritten' if compose_file.changed else 'unchanged' }},
+          stack {{ 'converged' if compose_up.changed else 'already correct' }}

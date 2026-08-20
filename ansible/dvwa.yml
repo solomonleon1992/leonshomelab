@@ -1,0 +1,69 @@
+---
+# DVWA — intentionally vulnerable web app on VM 102.
+#
+# IaC-MIGRATION.md §6, position 2. Safe to convert because DVWA has NO
+# volumes: its MySQL data lives inside the container, so a recreate is a full
+# reset and there is no state for a mistake to orphan.
+#
+#     ansible-playbook dvwa.yml --check --diff
+#     ansible-playbook dvwa.yml
+#
+# !! This service exists to be exploited. It shares a host with Caddy, which
+# holds the internal root CA private key. ARCHITECTURE.md §7.1 tracks moving
+# it to an isolated segment; until then, do not widen its exposure.
+
+- name: DVWA
+  hosts: Docker-Host
+  gather_facts: false
+
+  vars:
+    dvwa_dir: /home/leon/docker/dvwa
+    dvwa_port: 8080
+
+  tasks:
+
+    - name: Verify docker is present before changing anything
+      ansible.builtin.command: docker --version
+      changed_when: false
+      check_mode: false
+
+    - name: Ensure stack directory exists
+      ansible.builtin.file:
+        path: "{{ dvwa_dir }}"
+        state: directory
+        mode: "0755"
+
+    # The repository file is the source of truth. It is stored as
+    # `.example.yml` only because .gitignore blocks `docker-compose.yml` by
+    # name (this lab keeps secrets inline in compose files elsewhere), and it
+    # is deployed under the name docker compose actually expects.
+    - name: Deploy compose file from the repository
+      ansible.builtin.copy:
+        src: ../docker/dvwa.example.yml
+        dest: "{{ dvwa_dir }}/docker-compose.yml"
+        mode: "0644"
+      register: compose_file
+
+    - name: Bring the stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ dvwa_dir }}"
+        state: present
+      register: compose_up
+
+    - name: Verify DVWA answers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ dvwa_port }}/"
+        status_code: [200, 302]
+        follow_redirects: none
+      retries: 5
+      delay: 3
+      register: http_check
+      until: http_check.status in [200, 302]
+      changed_when: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          DVWA — HTTP {{ http_check.status | default('not probed (check mode)') }},
+          compose {{ 'rewritten' if compose_file.changed else 'unchanged' }},
+          stack {{ 'converged' if compose_up.changed else 'already correct' }}

@@ -23,8 +23,8 @@ So completeness is measured by exactly one question:
 | Service | Documented | Reproducible | Rebuild tested |
 |---|---|---|---|
 | n8n stack | ✅ | ✅ digest-pinned | ❌ *(restore ≠ rebuild — see below)* |
-| DVWA | ⚠️ compose only, no README | ✅ digest-pinned | ❌ — redeployed in place 2026-08-14, not on fresh hardware |
-| Portainer | ⚠️ compose only, no README | ✅ digest-pinned | ❌ — redeployed in place 2026-08-14, not on fresh hardware |
+| DVWA | ✅ Ansible playbook | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not on fresh hardware |
+| Portainer | ✅ Ansible playbook | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not on fresh hardware |
 | Caddy | ⚠️ Caddyfile recorded | ❌ | ❌ |
 | Jellyfin | ⚠️ | ❌ | ❌ |
 | `secplus-drill` | ✅ Ansible playbook | ✅ digest-pinned | ⚠️ converged in place 2026-08-20, idempotent; not yet rebuilt on fresh hardware |
@@ -32,7 +32,7 @@ So completeness is measured by exactly one question:
 | Wazuh | ⚠️ | — out of scope (§8) | — |
 | OPNsense | ⚠️ | — out of scope (§8) | — |
 
-**Honest score as of 2026-08-20: four services are reproducible on paper, one is managed by Ansible, none has passed the rebuild test.**
+**Honest score as of 2026-08-20: four services are reproducible on paper, three are managed by Ansible, none has passed the rebuild test.**
 
 Three compose files now pin every image by digest, so the repository can finally state what it builds — that closes the *reproducibility* half. The *rebuild* half is untouched. DVWA and Portainer were recreated from their repo files, which proves those files are accurate, but it happened **on the existing host with its existing state**. That is not the same as reconstituting a service from the repository alone on hardware that need not match.
 
@@ -224,7 +224,7 @@ Ordered by blast radius, cheapest first. The point of the early entries is to be
 | # | Service | Host | Why in this position |
 |---|---|---|---|
 | 1 | `secplus-drill` | VM 102 | ✅ **DONE 2026-08-20** — `ansible/secplus-drill.yml`. Converged, then re-run: `changed=0`
-| 2 | DVWA + Portainer | VM 102 | Closes R-13; both need compose files regardless. DVWA has no dependents |
+| 2 | DVWA + Portainer | VM 102 | ✅ **DONE 2026-08-20** — `ansible/dvwa.yml`, `ansible/portainer.yml`. Both `changed=0` on re-run; Portainer asserts its database survived |
 | 3 | Jellyfin | VM 102 | `network_mode: host` and media paths add real complexity. Failure means no TV, not data loss |
 | 4 | Caddy | VM 102 | Holds the internal root CA volume and fronts n8n. **`caddy_caddy_data` must survive** — see §6.1 |
 | 5 | Pi-hole | Pi (.50) | Household DNS. An outage affects people who did not opt into this lab |
@@ -320,3 +320,4 @@ An honest plan accounts for the harm it can do.
 | 2026-08-14 | **§4.3 closed (R-13)** — DVWA and Portainer reconstructed and redeployed from the exact repo files; Portainer's data verified retained. **§1.1 scorecard corrected**: three services are now reproducible on paper (digest-pinned compose), where the table previously read zero, but **none has passed the rebuild test** — redeploying on the existing host is not reconstitution on fresh hardware. Production still runs floating tags regardless (R-09). |
 | 2026-08-14 | Roadmap created. Ansible-first decision recorded (§2) with Terraform deferred to greenfield (§7). Control node set to MSI Katana + WSL (§3); WSL confirmed not installed. **R-09 promoted to High / Phase-0 prerequisite** — `:latest` makes the repository unable to reproduce any service, including n8n (§4.2). **R-15 identified** — Ansible SSH key concentration on an unencrypted laptop (§3.2). Scope boundary set: Wazuh, OPNsense, Proxmox host, and Metasploitable2 excluded from IaC with a tested-restore bar instead (§8). Rebuild-vs-restore distinction defined; honest current score is zero reproducible services (§1.1). |
 | 2026-08-20 | **Phase 2 begins — `secplus-drill` converted** (§6, position 1). `ansible/secplus-drill.yml`: converged, then re-run clean at **`changed=0`**. The compose file is generated with `nginx` pinned by digest. **Check mode earned its keep on the first run**, catching a bug that would have broken every dry run — the HTTP check skips under `--check`, so the report task referenced `http_check.status` on an empty dict. The docker precondition now runs with `check_mode: false`, because a precondition that is skipped during a dry run is not a precondition. Conversion surfaced an unrelated data-loss gap: `html/index.html`, 44 KB of hand-written study material, was absent from Tier 1 while the compose file beside it was captured — the replaceable half was backed up and the irreplaceable half was not. Now captured (30 items). **The playbook manages the html directory but not its contents**, deliberately: a playbook that owns a directory can empty it, and the content has no second home yet. Until it does, this service can be rebuilt but the thing it serves cannot — which is why §1.1 still shows ⚠️ rather than a rebuild date. |
+| 2026-08-20 | **§6 position 2 done — DVWA and Portainer.** Both converged and idempotent (`changed=0`). The repo compose files became the deployed source, and doing so exposed that they had **already drifted** from the host copies — comments added after the 2026-08-14 deployment. Harmless this time, verified comments-only before overwriting, but it is exactly the divergence Ansible exists to stop. Portainer's playbook carries two safeguards worth reusing: it **asserts the database survived** via the admin-check endpoint (204 = admin exists, 404 = empty), because `portainer.db`'s checksum changes on every restart and is useless as a retention test; and it **refuses to create the data volume** if missing, since an auto-created empty volume produces a healthy-looking Portainer with everything gone. |

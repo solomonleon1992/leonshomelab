@@ -1,0 +1,202 @@
+---
+# n8n stack — Terry, the job-finder, PostgreSQL and Ollama on VM 105.
+#
+# IaC-MIGRATION.md §6, position 6. The last conversion and the highest-stakes:
+# four ACTIVE workflows, a live job search running through them, and one
+# PostgreSQL instance holding both n8n's database and jobtracker.
+#
+#     ansible-playbook n8n.yml --check --diff
+#     ansible-playbook n8n.yml
+#
+# ===========================================================================
+# THIS PLAYBOOK NEVER TOUCHES SECRETS.
+#
+# Unlike every other service here, ~/n8n-stack/docker-compose.yml carries
+# N8N_ENCRYPTION_KEY and the database password INLINE. That is why .gitignore
+# blocks compose files, and why the repository holds
+# docker-compose.example.yml with ${VAR} placeholders instead.
+#
+# So this playbook does NOT deploy the compose file from the repository. It
+# makes one surgical edit — declaring the volumes external — and leaves the
+# environment section untouched. Ansible never reads, writes, or transports a
+# secret value.
+#
+# Migrating those secrets into a .env file is the documented target
+# (docker-compose.example.yml says so) and would let the real compose file
+# live in this repo. It is deliberately NOT done here: getting .env wrong
+# means every credential fails to decrypt, and four active workflows carrying
+# a live job search are the wrong thing to wager on a convenience.
+# ===========================================================================
+
+- name: n8n stack
+  hosts: n8n-ai-stack
+  gather_facts: false
+
+  vars:
+    n8n_dir: /home/leon/n8n-stack
+    n8n_volumes:
+      - {decl: postgres_data, real: n8n-stack_postgres_data}
+      - {decl: n8n_data, real: n8n-stack_n8n_data}
+      - {decl: ollama_data, real: n8n-stack_ollama_data}
+
+  tasks:
+
+    - name: Verify docker is present before changing anything
+      ansible.builtin.command: docker --version
+      changed_when: false
+      check_mode: false
+
+    # The same failure Caddy had. Declared non-external, the real volume names
+    # derive from the compose project name, which derives from the DIRECTORY
+    # NAME. Renaming ~/n8n-stack would silently produce three empty volumes:
+    # a fresh PostgreSQL with no n8n database and no jobtracker, and an n8n
+    # whose credentials cannot decrypt because the key went with it.
+    - name: Check all three volumes exist
+      ansible.builtin.command: "docker volume inspect {{ item.real }}"
+      loop: "{{ n8n_volumes }}"
+      register: vol_check
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Fail clearly if any volume is absent
+      ansible.builtin.assert:
+        that: vol_check.results | selectattr('rc', 'ne', 0) | list | length == 0
+        fail_msg: >-
+          An n8n volume is missing. This playbook will NOT create one.
+          n8n-stack_postgres_data holds both the n8n database and jobtracker;
+          starting without it yields an empty PostgreSQL that looks healthy.
+        success_msg: all three volumes present
+
+    - name: Record state BEFORE (to prove nothing was lost)
+      ansible.builtin.shell: >-
+        printf 'active=%s creds=%s jobs=%s'
+        "$(docker exec n8n-postgres psql -U n8n -d n8n -tAc 'SELECT count(*) FROM workflow_entity WHERE active;' | tr -d '[:space:]')"
+        "$(docker exec n8n-postgres psql -U n8n -d n8n -tAc 'SELECT count(*) FROM credentials_entity;' | tr -d '[:space:]')"
+        "$(docker exec n8n-postgres psql -U n8n -d jobtracker -tAc 'SELECT count(*) FROM job_matches;' | tr -d '[:space:]')"
+      args:
+        executable: /bin/bash
+      register: state_before
+      changed_when: false
+      check_mode: false
+
+    - name: Back up the compose file before editing it
+      ansible.builtin.copy:
+        src: "{{ n8n_dir }}/docker-compose.yml"
+        dest: "{{ n8n_dir }}/docker-compose.yml.ansible-bak"
+        remote_src: true
+        force: false
+        mode: "0600"
+
+    # ------------------------------------------------------------------
+    # TWO INDEPENDENT GUARDS, because this task edits a file that holds
+    # N8N_ENCRYPTION_KEY and a live job search runs on the result.
+    #
+    # The first version of this task used a loose pattern that allowed the
+    # end-of-line anchor to match after the FIRST volume key under
+    # re.MULTILINE. On a second run it therefore matched a two-line fragment
+    # of the ALREADY-CONVERTED block, replaced it, and appended a duplicate
+    # tail — producing "mapping key external already defined" and an
+    # unparseable compose file. The stack kept running only because the
+    # containers were already up.
+    #
+    # A loose regexp combined with a non-idempotent replace is a corruption
+    # primitive. Both guards below exist so that failure cannot recur:
+    #   1. the pattern matches ONLY the bare three-line original form
+    #   2. the task is skipped entirely once three external declarations exist
+    # ------------------------------------------------------------------
+    - name: Check whether the volumes are already external
+      ansible.builtin.command: "grep -c 'external: true' {{ n8n_dir }}/docker-compose.yml"
+      register: ext_count
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Declare volumes external so a directory rename cannot orphan them
+      ansible.builtin.replace:
+        path: "{{ n8n_dir }}/docker-compose.yml"
+        regexp: '^volumes:\n  postgres_data:\n  n8n_data:\n  ollama_data:\s*$'
+        replace: |-
+          volumes:
+            postgres_data:
+              external: true
+              name: n8n-stack_postgres_data
+            n8n_data:
+              external: true
+              name: n8n-stack_n8n_data
+            ollama_data:
+              external: true
+              name: n8n-stack_ollama_data
+      when: ext_count.stdout | int != 3
+      register: vol_edit
+
+    - name: Validate the compose file still parses
+      ansible.builtin.command: docker compose config --quiet
+      args:
+        chdir: "{{ n8n_dir }}"
+      changed_when: false
+
+    - name: Bring the stack up
+      community.docker.docker_compose_v2:
+        project_src: "{{ n8n_dir }}"
+        state: present
+      register: compose_up
+
+    - name: Wait for n8n to answer
+      ansible.builtin.uri:
+        url: http://127.0.0.1:5678/healthz
+        status_code: 200
+      retries: 12
+      delay: 5
+      register: health
+      until: health.status == 200
+      changed_when: false
+      check_mode: false
+
+    - name: Record state AFTER
+      ansible.builtin.shell: >-
+        printf 'active=%s creds=%s jobs=%s'
+        "$(docker exec n8n-postgres psql -U n8n -d n8n -tAc 'SELECT count(*) FROM workflow_entity WHERE active;' | tr -d '[:space:]')"
+        "$(docker exec n8n-postgres psql -U n8n -d n8n -tAc 'SELECT count(*) FROM credentials_entity;' | tr -d '[:space:]')"
+        "$(docker exec n8n-postgres psql -U n8n -d jobtracker -tAc 'SELECT count(*) FROM job_matches;' | tr -d '[:space:]')"
+      args:
+        executable: /bin/bash
+      register: state_after
+      changed_when: false
+      check_mode: false
+
+    - name: Fail if any state was lost
+      ansible.builtin.assert:
+        that: state_after.stdout == state_before.stdout
+        fail_msg: >-
+          STATE CHANGED. Before: {{ state_before.stdout }}.
+          After: {{ state_after.stdout }}. A volume was probably not bound.
+          Restore docker-compose.yml.ansible-bak and bring the stack up again
+          before touching anything else.
+        success_msg: "state identical: {{ state_after.stdout }}"
+
+    # The only check that proves N8N_ENCRYPTION_KEY still works. Workflows
+    # restore from plaintext JSON and look perfect with a wrong key; the
+    # credentials are what fails. Output goes to a file inside the container,
+    # is never read, and is deleted immediately — only the exit code is used.
+    - name: Prove credentials still decrypt
+      ansible.builtin.shell: >-
+        docker exec n8n n8n export:credentials --all --decrypted
+        --output=/tmp/cred-check.json >/dev/null 2>&1;
+        rc=$?;
+        docker exec n8n rm -f /tmp/cred-check.json >/dev/null 2>&1;
+        exit $rc
+      args:
+        executable: /bin/bash
+      register: cred_check
+      changed_when: false
+      check_mode: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          n8n stack — healthz {{ health.status | default('not probed') }},
+          state {{ state_after.stdout | default('not read') }},
+          credentials {{ 'decrypt OK' if cred_check.rc | default(1) == 0 else 'FAILED TO DECRYPT' }},
+          volumes {{ 'externalised this run' if vol_edit.changed | default(false) else 'already external' }},
+          stack {{ 'converged' if compose_up.changed else 'already correct' }}

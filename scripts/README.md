@@ -1,6 +1,6 @@
 # Backup Scripts
 
-**Status:** Operational · **Last verified:** 2026-08-14
+**Status:** Operational · **Last verified:** 2026-08-21
 
 `Backup-Tier1.ps1` is the only thing that puts any of this lab on hardware other than the single 4 TB disk every VM lives on. See `ARCHITECTURE.md` §7.10 for the two-tier strategy and R-01 for why it exists.
 
@@ -22,7 +22,7 @@ Pulls the small, irreplaceable set of configuration and data off-host to the MSI
 
 ---
 
-## 2. ⚠️ The Archive Contains Live Credentials
+## 2. ⚠️ The Archive Contains Live Credentials and Personal Data
 
 This is not a "config backup" in the harmless sense. Every archive holds:
 
@@ -33,6 +33,7 @@ This is not a "config backup" in the harmless sense. Every archive holds:
 | **Wazuh `client.keys`** | `/var/ossec/etc/` | **Agent authentication material.** Anyone holding it can impersonate an agent to the manager |
 | OPNsense `config.xml` | `/conf/` | The complete firewall, including user password hashes |
 | Proxmox guest configs | `/etc/pve/` | May carry cloud-init passwords and SSH keys |
+| **Personal email content** | `jobtracker.job_emails` | Sender addresses, subjects and body snippets from the job-search inbox. Added 2026-08-21 when `job-finder-inbox` went live — the table sits inside `jobtracker`, which is dumped wholesale, so it arrived without any change to this script |
 
 ### The `client.keys` trade, stated plainly
 
@@ -43,6 +44,16 @@ Without `client.keys`, a Wazuh restore means re-enrolling every agent by hand. W
 **The control is the encryption, not omission.** AES-256 with encrypted headers, and the password held in **Bitwarden — outside the lab's failure domain**.
 
 > **The archive password must never move to Vaultwarden.** Vaultwarden would run on the lab. If the lab is lost you need this archive to rebuild it, and its password would be locked inside the thing being rebuilt. See `ARCHITECTURE.md` §7.11.
+
+### This archive is no longer only infrastructure
+
+Until 2026-08-21 every item here was configuration or credentials — unpleasant to leak, but impersonal. `job_emails` changes that: the archive now carries **sender addresses, subject lines and body snippets** from a real inbox, including correspondence with employers.
+
+Nothing about the protection changed — same AES-256, same encrypted headers, same password outside the lab's failure domain. What changed is the **judgement** you should apply to a copy of it. An infrastructure backup is something you might reasonably hand to someone helping you rebuild; this is not.
+
+It arrived without any edit to `Backup-Tier1.ps1`, because the script dumps the `jobtracker` database whole. That is the correct behaviour — a new table holding real data was protected automatically rather than being missed. But it means **the contents of this archive can change without the script changing**, and nothing will announce it. Re-read this section whenever a workflow starts storing something new.
+
+n8n's *execution history* holds full email bodies as well, but it is excluded from the dump and prunes at 5,000 executions (roughly four days at the current rate), so it is transient rather than archived.
 
 **Never commit an archive.** `.gitignore` blocks `*.7z`, and the script refuses to write into the repository, but neither is a substitute for knowing what is in the file.
 
